@@ -1683,12 +1683,12 @@ button {
 
 .big-bg {
   position: absolute;
-  inset: -14%;
+  inset: -18%;
   background-size: cover;
   background-position: center;
-  filter: blur(62px) saturate(1.5);
+  filter: blur(40px) saturate(1.5);
   opacity: 0.86;
-  transform: scale(1.18);
+  transform: scale(1.22);
   pointer-events: none;
 }
 
@@ -1788,7 +1788,7 @@ button {
 }
 
 .big-cover {
-  width: min(34vh, 350px);
+  width: min(37vh, 390px);
   aspect-ratio: 1;
   border-radius: 24px;
   overflow: hidden;
@@ -2038,7 +2038,7 @@ button {
   }
 
   .big-cover {
-    width: min(30vh, 290px);
+    width: min(33vh, 320px);
   }
 }
 
@@ -2049,7 +2049,7 @@ button {
   }
 
   .big-cover {
-    width: min(30vh, 240px);
+    width: min(32vh, 260px);
   }
 
   .big-info {

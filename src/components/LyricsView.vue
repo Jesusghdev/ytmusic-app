@@ -239,7 +239,7 @@ onBeforeUnmount(() => {
  * línea actual, con más contexto hacia adelante que hacia atrás.
  */
 .lyrics-viewport.windowed {
-  padding-right: 5%;
+  padding-right: 9%;
   mask-image: linear-gradient(
     to bottom,
     transparent 0%,
@@ -273,7 +273,7 @@ onBeforeUnmount(() => {
 }
 
 .lyrics-viewport.windowed .line.active {
-  transform: scale(1.055);
+  transform: scale(1.085);
   filter:
     drop-shadow(0 0 34px rgba(255, 59, 92, 0.3))
     drop-shadow(0 4px 26px rgba(0, 0, 0, 0.5));
