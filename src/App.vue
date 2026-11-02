@@ -132,6 +132,10 @@ function songKeyOf(state: PlayerState): string {
   return `m:${state.title}|${state.artist}|${state.album}`;
 }
 
+function playbackKeyOf(state: PlayerState): string {
+  return [state.video_id, state.title, state.artist, state.album].join("|");
+}
+
 function currentSongKey(): string {
   return songKeyOf(player.value);
 }
@@ -192,17 +196,27 @@ function formatTime(seconds: number): string {
 
 function applyPlayer(next: PlayerState) {
   const previous = player.value;
-  const previousSong = songKeyOf(previous);
-  const nextSong = songKeyOf(next);
-  const songChanged =
-    !!previousSong && !!nextSong && previousSong !== nextSong;
+  const previousTrack = playbackKeyOf(previous);
+  const nextTrack = playbackKeyOf(next);
+  const trackChanged = previousTrack !== nextTrack;
+
+  const previousAtEnd =
+    previous.duration > 0 &&
+    previous.position >= previous.duration - 3;
+  const nextAtEnd = next.duration > 0 && next.position >= next.duration - 3;
+  const durationChanged =
+    previous.duration > 0 &&
+    next.duration > 0 &&
+    Math.abs(next.duration - previous.duration) > 1;
+
+  // Cambio de pista o transición de fin de canción en la que YouTube Music
+  // actualiza la duración de la barra antes que el elemento de video.
+  const endTransition =
+    previousAtEnd && nextAtEnd && durationChanged;
 
   player.value = next;
 
-  if (songChanged) {
-    // Al pasar a otra canción hay que reiniciar el reloj local. En el cambio
-    // automático, el estado nuevo puede llegar con la duración/posición de la
-    // canción anterior; mostramos 0 hasta que llegue la posición definitiva.
+  if (trackChanged || endTransition) {
     seekGuardUntil = 0;
     anchorPosition.value = next.position <= 3 ? next.position : 0;
     anchorAt.value = performance.now();

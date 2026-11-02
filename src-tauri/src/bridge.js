@@ -43,15 +43,18 @@
     return seconds;
   }
 
-  function readBarDuration() {
+  function readBarTime() {
     var node = document.querySelector("ytmusic-player-bar .time-info");
-    if (!node) return 0;
+    if (!node) return { position: 0, duration: 0 };
 
     var text = (node.textContent || "").replace(/\s+/g, " ").trim();
     var slash = text.lastIndexOf("/");
-    if (slash < 0) return 0;
+    if (slash < 0) return { position: 0, duration: 0 };
 
-    return parseClock(text.slice(slash + 1));
+    return {
+      position: Math.max(0, parseClock(text.slice(0, slash))),
+      duration: parseClock(text.slice(slash + 1)),
+    };
   }
 
   function clean(value, max) {
@@ -138,14 +141,26 @@
     var el = video();
     var playing = false;
     var videoDuration = el && isFinite(el.duration) ? el.duration : 0;
-    var barDuration = readBarDuration();
+    var bar = readBarTime();
+    var barDuration = bar.duration;
+    var barPosition = bar.position;
     var duration = videoDuration;
+    var position = el && isFinite(el.currentTime) ? el.currentTime : 0;
 
-    // La barra del reproductor refleja la pista activa. Si el <video> tiene una
-    // duración muy distinta (por ejemplo, una pista precargada o el video
-    // equivocado), usamos la duración visible de YouTube Music.
-    if (barDuration > 0 && Math.abs(barDuration - videoDuration) > 2) {
-      duration = barDuration;
+    if (barDuration > 0) {
+      // La barra del reproductor refleja la pista activa. Si el <video> aún
+      // conserva la duración/posición de la canción anterior, priorizamos la
+      // barra para que el contador no se quede al final del tema nuevo.
+      if (Math.abs(barDuration - videoDuration) > 2) {
+        duration = barDuration;
+        position = barPosition;
+      } else if (
+        position < 0 ||
+        position > barDuration + 1 ||
+        Math.abs(position - barPosition) > 5
+      ) {
+        position = barPosition;
+      }
     }
 
     if (el) {
@@ -165,7 +180,7 @@
       artwork: meta.artwork,
       video_id: getVideoId(),
       duration: duration,
-      position: el && isFinite(el.currentTime) ? el.currentTime : 0,
+      position: position,
       playing: playing,
       volume: el && isFinite(el.volume) ? el.volume : 1,
     };

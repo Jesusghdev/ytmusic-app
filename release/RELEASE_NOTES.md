@@ -1,13 +1,12 @@
-# YouTube Music Desktop v0.2.1
+# YouTube Music Desktop v0.2.2
 
 Actualización para **Windows x64**.
 
-## Novedades en v0.2.1
+## Novedades en v0.2.2
 
-- Corregido el contador de tiempo y la sincronización de la letra al pasar **automáticamente** a la siguiente canción.
-- El tiempo vuelve a **0:00** al empezar un tema nuevo, incluso si la siguiente canción no tiene letra disponible.
-- La detección de duración prioriza la barra oficial de YouTube Music para evitar duraciones incorrectas.
-- Reintentos automáticos en la búsqueda de letras cuando una fuente falla temporalmente.
+- Corregido el caso raro al terminar una canción de forma **natural**: el contador tomaba la duración del siguiente tema pero se quedaba al final (por ejemplo, pasaba de `4:06 / 4:06` a `2:49 / 2:49`). Ahora se usa también la posición de la barra oficial de YouTube Music y se reinicia a `0:00`.
+- Se mantiene el reinicio del contador al cambiar automáticamente de canción, incluso si la siguiente no tiene letra.
+- Reintentos automáticos en la búsqueda de letras y prioridad de la duración de la barra oficial.
 
 ## Descargar
 
