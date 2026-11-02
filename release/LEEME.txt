@@ -1,0 +1,23 @@
+YouTube Music Desktop - Version portable
+=========================================
+
+Requisitos:
+- Windows 10/11 de 64 bits.
+- Microsoft Edge WebView2 (incluido en Windows 11; en Windows 10 puede que haya que instalarlo).
+
+Como usar:
+1. Descomprime el ZIP en una carpeta.
+2. Ejecuta "YouTube Music Desktop.exe".
+3. Si Windows SmartScreen muestra un aviso, pulsa "Mas informacion" y luego "Ejecutar de todas formas".
+4. Inicia sesion con tu cuenta de Google dentro de la app.
+
+Control remoto:
+- Pulsa "Remoto" y escanea el codigo QR con el celular.
+- El PC y el celular deben estar en la misma red Wi-Fi.
+- Si Windows pregunta por el firewall, permite el acceso en redes privadas.
+
+Notas:
+- Proyecto no oficial, no afiliado a Google/YouTube.
+- YouTube Music y su logo son marcas de Google.
+- La sesion de Google se guarda localmente en el equipo, no en este ZIP.
+- El control remoto no tiene autenticacion; usalo solo en redes de confianza.
