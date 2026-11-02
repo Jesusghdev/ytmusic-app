@@ -47,6 +47,9 @@ const lyricsSongKey = ref("");
 const lyricsCache = new Map<string, Lyrics>();
 let lyricsRequest = 0;
 let lyricsTimer: number | undefined;
+let lyricsRetryTimer: number | undefined;
+let lyricsAttempt = 0;
+const MAX_LYRICS_ATTEMPTS = 3;
 let errorTimer: number | undefined;
 
 const remote = ref<RemoteInfo | null>(null);
@@ -526,11 +529,38 @@ function onKeydown(event: KeyboardEvent) {
   }
 }
 
-async function loadLyrics(force = false) {
+function clearLyricsRetry() {
+  window.clearTimeout(lyricsRetryTimer);
+  lyricsRetryTimer = undefined;
+}
+
+function scheduleLyricsRetry(song: string): boolean {
+  clearLyricsRetry();
+  lyricsAttempt += 1;
+
+  if (lyricsAttempt > MAX_LYRICS_ATTEMPTS) return false;
+
+  lyricsLoading.value = true;
+  lyricsRetryTimer = window.setTimeout(
+    () => {
+      if (currentSongKey() !== song) return;
+      void loadLyrics(true, true);
+    },
+    1200 * lyricsAttempt,
+  );
+  return true;
+}
+
+async function loadLyrics(force = false, isRetry = false) {
   const key = trackKey.value;
   const song = currentSongKey();
   if (!key || !song) return;
   if (!force && key === lyricsKey.value && lyrics.value) return;
+
+  if (!isRetry) {
+    clearLyricsRetry();
+    lyricsAttempt = 0;
+  }
 
   lyricsKey.value = key;
   lyricsSongKey.value = song;
@@ -538,6 +568,8 @@ async function loadLyrics(force = false) {
   const request = lyricsRequest;
   const duration = player.value.duration;
   lyricsLoading.value = true;
+
+  let retrying = false;
 
   try {
     const result = await invoke<Lyrics>("get_lyrics", {
@@ -550,16 +582,31 @@ async function loadLyrics(force = false) {
     if (request !== lyricsRequest) return;
     if (currentSongKey() !== song) return;
 
-    lyrics.value = result;
-
-    // Solo cachea resultados útiles para la misma canción. Si no se encontró
-    // letra, un cambio posterior del estado puede reintentar la búsqueda.
     if (result.lines.length > 0 || result.instrumental) {
+      clearLyricsRetry();
+      lyricsAttempt = 0;
+      lyrics.value = result;
       lyricsCache.set(song, result);
+      return;
     }
+
+    // Si no se encontró letra, reintenta antes de mostrar el mensaje.
+    if (scheduleLyricsRetry(song)) {
+      retrying = true;
+      return;
+    }
+
+    const cached = lyricsCache.get(song);
+    lyrics.value = cached ?? result;
   } catch (error) {
     if (request === lyricsRequest && currentSongKey() === song) {
-      lyrics.value = {
+      if (scheduleLyricsRetry(song)) {
+        retrying = true;
+        return;
+      }
+
+      const cached = lyricsCache.get(song);
+      lyrics.value = cached ?? {
         lines: [],
         synced: false,
         instrumental: false,
@@ -568,12 +615,19 @@ async function loadLyrics(force = false) {
       };
     }
   } finally {
-    if (request === lyricsRequest) lyricsLoading.value = false;
+    if (
+      request === lyricsRequest &&
+      !retrying &&
+      currentSongKey() === song
+    ) {
+      lyricsLoading.value = false;
+    }
   }
 }
 
 watch(trackKey, (key) => {
   window.clearTimeout(lyricsTimer);
+  clearLyricsRetry();
 
   if (!key) {
     lyricsRequest += 1;
@@ -581,6 +635,7 @@ watch(trackKey, (key) => {
     lyricsKey.value = "";
     lyricsSongKey.value = "";
     lyricsLoading.value = false;
+    lyricsAttempt = 0;
     return;
   }
 
@@ -591,9 +646,11 @@ watch(trackKey, (key) => {
   if (songChanged) {
     lyricsRequest += 1;
     lyricsSongKey.value = song;
+    lyricsAttempt = 0;
   }
 
   if (cached) {
+    clearLyricsRetry();
     lyricsKey.value = key;
     lyrics.value = cached;
     lyricsLoading.value = false;
@@ -667,6 +724,7 @@ onBeforeUnmount(() => {
   if (clockTimer) window.clearInterval(clockTimer);
   if (boundsFrame !== undefined) cancelAnimationFrame(boundsFrame);
   window.clearTimeout(lyricsTimer);
+  clearLyricsRetry();
   window.clearTimeout(errorTimer);
   stopBigScreenPoll();
   unlisten?.();
