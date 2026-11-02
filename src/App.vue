@@ -127,10 +127,13 @@ const trackKey = computed(() => {
   ].join("|");
 });
 
+function songKeyOf(state: PlayerState): string {
+  if (state.video_id) return `v:${state.video_id}`;
+  return `m:${state.title}|${state.artist}|${state.album}`;
+}
+
 function currentSongKey(): string {
-  const current = player.value;
-  if (current.video_id) return `v:${current.video_id}`;
-  return `m:${current.title}|${current.artist}|${current.album}`;
+  return songKeyOf(player.value);
 }
 
 const activeIndex = computed(() => {
@@ -188,7 +191,24 @@ function formatTime(seconds: number): string {
 }
 
 function applyPlayer(next: PlayerState) {
+  const previous = player.value;
+  const previousSong = songKeyOf(previous);
+  const nextSong = songKeyOf(next);
+  const songChanged =
+    !!previousSong && !!nextSong && previousSong !== nextSong;
+
   player.value = next;
+
+  if (songChanged) {
+    // Al pasar a otra canción hay que reiniciar el reloj local. En el cambio
+    // automático, el estado nuevo puede llegar con la duración/posición de la
+    // canción anterior; mostramos 0 hasta que llegue la posición definitiva.
+    seekGuardUntil = 0;
+    anchorPosition.value = next.position <= 3 ? next.position : 0;
+    anchorAt.value = performance.now();
+    anchorPlaying.value = next.playing;
+    return;
+  }
 
   if (performance.now() < seekGuardUntil) return;
 
@@ -240,10 +260,12 @@ function seekTo(seconds: number) {
 }
 
 function onSeekInput(event: Event) {
+  if (!event.isTrusted) return;
   seekDrag.value = Number((event.target as HTMLInputElement).value);
 }
 
 function onSeekChange(event: Event) {
+  if (!event.isTrusted) return;
   seekTo(Number((event.target as HTMLInputElement).value));
 }
 
