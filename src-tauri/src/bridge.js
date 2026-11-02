@@ -16,7 +16,42 @@
   var ipcUnavailable = false;
 
   function video() {
-    return document.querySelector("video");
+    return (
+      document.querySelector("#movie_player video.html5-main-video") ||
+      document.querySelector("#movie_player video") ||
+      document.querySelector("ytmusic-player video") ||
+      document.querySelector("video")
+    );
+  }
+
+  function parseClock(value) {
+    var parts = String(value || "")
+      .trim()
+      .split(":")
+      .map(function (part) {
+        return parseInt(part, 10);
+      });
+
+    if (!parts.length || parts.some(function (part) { return isNaN(part); })) {
+      return 0;
+    }
+
+    var seconds = 0;
+    for (var i = 0; i < parts.length; i += 1) {
+      seconds = seconds * 60 + parts[i];
+    }
+    return seconds;
+  }
+
+  function readBarDuration() {
+    var node = document.querySelector("ytmusic-player-bar .time-info");
+    if (!node) return 0;
+
+    var text = (node.textContent || "").replace(/\s+/g, " ").trim();
+    var slash = text.lastIndexOf("/");
+    if (slash < 0) return 0;
+
+    return parseClock(text.slice(slash + 1));
   }
 
   function clean(value, max) {
@@ -102,6 +137,16 @@
     var meta = readMeta();
     var el = video();
     var playing = false;
+    var videoDuration = el && isFinite(el.duration) ? el.duration : 0;
+    var barDuration = readBarDuration();
+    var duration = videoDuration;
+
+    // La barra del reproductor refleja la pista activa. Si el <video> tiene una
+    // duración muy distinta (por ejemplo, una pista precargada o el video
+    // equivocado), usamos la duración visible de YouTube Music.
+    if (barDuration > 0 && Math.abs(barDuration - videoDuration) > 2) {
+      duration = barDuration;
+    }
 
     if (el) {
       playing = !el.paused && !el.ended;
@@ -119,7 +164,7 @@
       album: meta.album,
       artwork: meta.artwork,
       video_id: getVideoId(),
-      duration: el && isFinite(el.duration) ? el.duration : 0,
+      duration: duration,
       position: el && isFinite(el.currentTime) ? el.currentTime : 0,
       playing: playing,
       volume: el && isFinite(el.volume) ? el.volume : 1,
