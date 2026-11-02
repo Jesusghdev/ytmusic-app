@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#08080a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Control remoto · YouTube Music</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --red: #ff3b5c;
+        --text: #f7f7fa;
+        --muted: #9b9ba6;
+        --line: rgba(255, 255, 255, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: #08080a;
+        color: var(--text);
+        font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+      }
+
+      body {
+        min-height: 100dvh;
+        display: flex;
+        justify-content: center;
+        padding: max(18px, env(safe-area-inset-top)) 18px max(24px, env(safe-area-inset-bottom));
+        overflow-x: hidden;
+      }
+
+      .glow {
+        position: fixed;
+        inset: -20%;
+        background-image: var(--art, none);
+        background-size: cover;
+        background-position: center;
+        filter: blur(70px) saturate(1.4);
+        opacity: 0.32;
+        transform: scale(1.2);
+        transition: opacity 0.6s ease;
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      .glow::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at 50% 20%, rgba(8, 8, 10, 0.25), #08080a 70%);
+      }
+
+      main {
+        position: relative;
+        z-index: 1;
+        width: 100%;
+        max-width: 460px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        padding-top: 4px;
+      }
+
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #f0a020;
+        box-shadow: 0 0 12px #f0a02088;
+        transition: background 0.3s ease, box-shadow 0.3s ease;
+      }
+
+      .status.live .dot {
+        background: #39d98a;
+        box-shadow: 0 0 12px #39d98a88;
+      }
+
+      .cover {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 1;
+        max-height: 46vh;
+        border-radius: 22px;
+        overflow: hidden;
+        background: linear-gradient(145deg, #23232a, #101014);
+        box-shadow: 0 30px 60px rgba(0, 0, 0, 0.55);
+      }
+
+      .cover img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        opacity: 0;
+        transition: opacity 0.35s ease;
+      }
+
+      .cover img.ready {
+        opacity: 1;
+      }
+
+      .cover .placeholder {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        font-size: 72px;
+        color: rgba(255, 255, 255, 0.18);
+        background:
+          radial-gradient(circle at 30% 20%, rgba(255, 59, 92, 0.35), transparent 55%),
+          radial-gradient(circle at 75% 80%, rgba(90, 60, 255, 0.3), transparent 55%),
+          linear-gradient(145deg, #191920, #0d0d11);
+      }
+
+      .meta {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .meta h1 {
+        margin: 0;
+        font-size: clamp(21px, 6vw, 28px);
+        line-height: 1.2;
+        letter-spacing: -0.02em;
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }
+
+      .meta p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 15px;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      .progress {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      input[type="range"] {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        height: 22px;
+        margin: 0;
+        background: transparent;
+        cursor: pointer;
+      }
+
+      input[type="range"]::-webkit-slider-runnable-track {
+        height: 5px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--red) var(--fill, 0%), rgba(255, 255, 255, 0.16) var(--fill, 0%));
+      }
+
+      input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 15px;
+        height: 15px;
+        margin-top: -5px;
+        border-radius: 50%;
+        background: #fff;
+        border: none;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+      }
+
+      input[type="range"]::-moz-range-track {
+        height: 5px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.16);
+      }
+
+      input[type="range"]::-moz-range-progress {
+        height: 5px;
+        border-radius: 999px;
+        background: var(--red);
+      }
+
+      input[type="range"]::-moz-range-thumb {
+        width: 15px;
+        height: 15px;
+        border: none;
+        border-radius: 50%;
+        background: #fff;
+      }
+
+      .times {
+        display: flex;
+        justify-content: space-between;
+        color: var(--muted);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .controls {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 26px;
+        margin: 2px 0;
+      }
+
+      button {
+        border: 0;
+        background: transparent;
+        color: var(--text);
+        padding: 0;
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+
+      button:active {
+        transform: scale(0.94);
+      }
+
+      .ctrl {
+        width: 54px;
+        height: 54px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        color: rgba(255, 255, 255, 0.82);
+      }
+
+      .ctrl svg {
+        width: 30px;
+        height: 30px;
+        fill: currentColor;
+      }
+
+      .play {
+        width: 74px;
+        height: 74px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: #fff;
+        color: #0a0a0c;
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+      }
+
+      .play svg {
+        width: 34px;
+        height: 34px;
+        fill: currentColor;
+      }
+
+      .volume {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: var(--muted);
+      }
+
+      .volume svg {
+        width: 22px;
+        height: 22px;
+        fill: currentColor;
+        flex: none;
+      }
+
+      .volume input {
+        flex: 1;
+      }
+
+      footer {
+        text-align: center;
+        color: rgba(255, 255, 255, 0.32);
+        font-size: 12px;
+        padding: 4px 0 8px;
+      }
+
+      .offline {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px 16px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .offline strong {
+        color: var(--text);
+        display: block;
+        margin-bottom: 4px;
+        font-size: 15px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="glow" id="glow"></div>
+
+    <main>
+      <div class="status" id="status">
+        <span class="dot"></span>
+        <span id="statusText">Conectando…</span>
+      </div>
+
+      <div class="cover">
+        <div class="placeholder">♪</div>
+        <img id="art" alt="" />
+      </div>
+
+      <div class="meta">
+        <h1 id="title">Sin reproducción</h1>
+        <p id="artist">Abre YouTube Music en el PC</p>
+      </div>
+
+      <div class="progress">
+        <input id="seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Posición" />
+        <div class="times">
+          <span id="pos">0:00</span>
+          <span id="dur">0:00</span>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button class="ctrl" id="prev" aria-label="Anterior">
+          <svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zm3.5 7L19 5v14z" /></svg>
+        </button>
+        <button class="play" id="toggle" aria-label="Reproducir o pausar">
+          <svg id="toggleIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+        </button>
+        <button class="ctrl" id="next" aria-label="Siguiente">
+          <svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM5 5l10.5 7L5 19z" /></svg>
+        </button>
+      </div>
+
+      <div class="volume">
+        <svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4z" /></svg>
+        <input id="vol" type="range" min="0" max="100" step="1" value="100" aria-label="Volumen" />
+      </div>
+
+      <div class="offline" id="offline" hidden>
+        <strong>No hay conexión con el PC</strong>
+        Comprueba que la app esté abierta, que ambos equipos estén en la misma red Wi‑Fi y que el firewall de Windows permita la conexión.
+      </div>
+
+      <footer>YouTube Music Desktop · control remoto</footer>
+    </main>
+
+    <script>
+      (function () {
+        "use strict";
+
+        var seek = document.getElementById("seek");
+        var volume = document.getElementById("vol");
+        var art = document.getElementById("art");
+        var glow = document.getElementById("glow");
+        var titleEl = document.getElementById("title");
+        var artistEl = document.getElementById("artist");
+        var posEl = document.getElementById("pos");
+        var durEl = document.getElementById("dur");
+        var statusEl = document.getElementById("status");
+        var statusText = document.getElementById("statusText");
+        var offlineEl = document.getElementById("offline");
+        var toggleIcon = document.getElementById("toggleIcon");
+
+        var state = null;
+        var basePosition = 0;
+        var baseTime = 0;
+        var draggingSeek = false;
+        var draggingVolume = false;
+        var lastArtwork = "";
+
+        function formatTime(seconds) {
+          if (!isFinite(seconds) || seconds < 0) seconds = 0;
+          var total = Math.floor(seconds);
+          var hours = Math.floor(total / 3600);
+          var minutes = Math.floor((total % 3600) / 60);
+          var secs = total % 60;
+          if (hours > 0) {
+            return hours + ":" + String(minutes).padStart(2, "0") + ":" + String(secs).padStart(2, "0");
+          }
+          return minutes + ":" + String(secs).padStart(2, "0");
+        }
+
+        function currentPosition() {
+          if (!state) return 0;
+          if (!state.playing) return basePosition;
+          return basePosition + (performance.now() - baseTime) / 1000;
+        }
+
+        function setFill(input, ratio) {
+          input.style.setProperty("--fill", Math.max(0, Math.min(1, ratio)) * 100 + "%");
+        }
+
+        function render() {
+          if (!state) return;
+
+          var duration = state.duration > 0 ? state.duration : 0;
+          var position = Math.min(currentPosition(), duration > 0 ? duration : currentPosition());
+
+          if (titleEl.textContent !== (state.title || "Sin reproducción")) {
+            titleEl.textContent = state.title || "Sin reproducción";
+          }
+          artistEl.textContent = state.artist || "Abre YouTube Music en el PC";
+
+          posEl.textContent = formatTime(position);
+          durEl.textContent = formatTime(duration);
+
+          if (!draggingSeek) {
+            seek.value = duration > 0 ? Math.round((position / duration) * 1000) : 0;
+          }
+          setFill(seek, duration > 0 ? position / duration : 0);
+
+          var icon = state.playing
+            ? '<path d="M6 5h4v14H6zm8 0h4v14h-4z" />'
+            : '<path d="M8 5v14l11-7z" />';
+          if (toggleIcon.innerHTML !== icon) toggleIcon.innerHTML = icon;
+
+          if (state.artwork && state.artwork !== lastArtwork) {
+            lastArtwork = state.artwork;
+            art.classList.remove("ready");
+            art.src = state.artwork;
+            glow.style.setProperty("--art", 'url("' + state.artwork + '")');
+          } else if (!state.artwork && lastArtwork) {
+            lastArtwork = "";
+            art.removeAttribute("src");
+            art.classList.remove("ready");
+            glow.style.removeProperty("--art");
+          }
+
+          if (typeof state.volume === "number" && !draggingVolume) {
+            volume.value = Math.round(state.volume * 100);
+            setFill(volume, state.volume);
+          }
+        }
+
+        art.addEventListener("load", function () {
+          art.classList.add("ready");
+        });
+
+        art.addEventListener("error", function () {
+          art.classList.remove("ready");
+        });
+
+        function setOnline(online) {
+          statusEl.classList.toggle("live", online);
+          offlineEl.hidden = online;
+          if (!online) {
+            statusText.textContent = "Sin conexión";
+          } else if (state && state.title) {
+            statusText.textContent = state.playing ? "Reproduciendo" : "En pausa";
+          } else {
+            statusText.textContent = "Conectado";
+          }
+        }
+
+        async function poll() {
+          try {
+            var response = await fetch("/api/state", { cache: "no-store" });
+            if (!response.ok) throw new Error("bad status");
+            var data = await response.json();
+            var previousId = state && state.video_id;
+
+            state = data;
+            basePosition = data.position;
+            baseTime = performance.now();
+
+            var fresh = data.updated_at > 0 && Date.now() - data.updated_at < 6000;
+            setOnline(fresh);
+
+            if (previousId !== data.video_id) {
+              lastArtwork = "";
+            }
+            render();
+          } catch (error) {
+            setOnline(false);
+          }
+        }
+
+        async function send(action, value) {
+          var payload = { action: action };
+          if (typeof value === "number") payload.value = value;
+          try {
+            await fetch("/api/command", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+          } catch (error) {
+            setOnline(false);
+          }
+        }
+
+        function buzz() {
+          if (navigator.vibrate) navigator.vibrate(8);
+        }
+
+        document.getElementById("toggle").addEventListener("click", function () {
+          buzz();
+          if (state) {
+            state.playing = !state.playing;
+            basePosition = currentPosition();
+            baseTime = performance.now();
+            render();
+          }
+          send("toggle");
+        });
+
+        document.getElementById("next").addEventListener("click", function () {
+          buzz();
+          send("next");
+        });
+
+        document.getElementById("prev").addEventListener("click", function () {
+          buzz();
+          send("prev");
+        });
+
+        seek.addEventListener("input", function () {
+          draggingSeek = true;
+          var duration = state && state.duration > 0 ? state.duration : 0;
+          var value = duration > 0 ? (Number(seek.value) / 1000) * duration : 0;
+          posEl.textContent = formatTime(value);
+          setFill(seek, Number(seek.value) / 1000);
+        });
+
+        seek.addEventListener("change", function () {
+          var duration = state && state.duration > 0 ? state.duration : 0;
+          var value = duration > 0 ? (Number(seek.value) / 1000) * duration : 0;
+          draggingSeek = false;
+          basePosition = value;
+          baseTime = performance.now();
+          send("seek", value);
+        });
+
+        volume.addEventListener("input", function () {
+          draggingVolume = true;
+          var value = Number(volume.value) / 100;
+          setFill(volume, value);
+          if (state) state.volume = value;
+        });
+
+        volume.addEventListener("change", function () {
+          draggingVolume = false;
+          send("volume", Number(volume.value) / 100);
+        });
+
+        poll();
+        setInterval(poll, 1200);
+        setInterval(render, 250);
+      })();
+    </script>
+  </body>
+</html>
