@@ -28,13 +28,19 @@ struct LrcLibTrack {
 
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .user_agent("ytmusic-desktop/0.1 (app de escritorio personal)")
-        .timeout(Duration::from_secs(8))
+        .user_agent("ytmusic-desktop/0.2 (app de escritorio personal)")
+        .timeout(Duration::from_secs(5))
+        .connect_timeout(Duration::from_secs(3))
         .build()
         .map_err(|error| error.to_string())
 }
 
-pub async fn fetch(title: &str, artist: &str, album: &str, duration: f64) -> Result<Lyrics, String> {
+pub async fn fetch(
+    title: &str,
+    artist: &str,
+    album: &str,
+    duration: f64,
+) -> Result<Lyrics, String> {
     let title = title.trim();
     let artist = artist.trim();
     let album = album.trim();
@@ -44,70 +50,19 @@ pub async fn fetch(title: &str, artist: &str, album: &str, duration: f64) -> Res
     }
 
     let http = client()?;
-    let duration_seconds = if duration.is_finite() && duration > 0.0 {
-        Some(duration.round().max(1.0).to_string())
-    } else {
-        None
-    };
 
-    let mut query: Vec<(&str, String)> = vec![
-        ("track_name", title.to_string()),
-        ("artist_name", artist.to_string()),
-    ];
-    if !album.is_empty() {
-        query.push(("album_name", album.to_string()));
-    }
-    if let Some(seconds) = &duration_seconds {
-        query.push(("duration", seconds.clone()));
-    }
+    // Las fuentes se consultan a la vez. Antes se encadenaban: una canción
+    // sin letra podía tardar más de 30 s entre consultas y reintentos.
+    let (exact, candidates, plain) = tokio::join!(
+        lrclib_get(&http, title, artist, album, duration),
+        lrclib_search(&http, title, artist),
+        fetch_plain_fallback(&http, title, artist),
+    );
 
-    let response = http
-        .get("https://lrclib.net/api/get")
-        .query(&query)
-        .send()
-        .await
-        .map_err(|error| format!("No se pudo consultar LRCLIB: {error}"))?;
-
-    if response.status().is_success() {
-        if let Ok(track) = response.json::<LrcLibTrack>().await {
-            let result = to_result(track);
-            if !result.lines.is_empty() || result.instrumental {
-                return Ok(result);
-            }
-        }
-    }
-
-    // Segundo intento: búsqueda flexible.
-    let mut search_query: Vec<(&str, String)> = vec![
-        ("track_name", title.to_string()),
-        ("artist_name", artist.to_string()),
-    ];
-    if search_query[1].1.is_empty() {
-        search_query[1].1 = title.to_string();
-    }
-
-    let searched = http
-        .get("https://lrclib.net/api/search")
-        .query(&search_query)
-        .send()
-        .await
-        .map_err(|error| format!("No se pudo buscar la letra: {error}"))?;
-
-    let mut candidates = if searched.status().is_success() {
-        searched.json::<Vec<LrcLibTrack>>().await.unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    if candidates.is_empty() {
-        let fallback = http
-            .get("https://lrclib.net/api/search")
-            .query(&[("q", format!("{title} {artist}"))])
-            .send()
-            .await
-            .map_err(|error| format!("No se pudo buscar la letra: {error}"))?;
-        if fallback.status().is_success() {
-            candidates = fallback.json::<Vec<LrcLibTrack>>().await.unwrap_or_default();
+    if let Some(track) = exact {
+        let result = to_result(track);
+        if !result.lines.is_empty() || result.instrumental {
+            return Ok(result);
         }
     }
 
@@ -118,7 +73,25 @@ pub async fn fetch(title: &str, artist: &str, album: &str, duration: f64) -> Res
         }
     }
 
-    if let Some(plain) = fetch_plain_fallback(&http, title, artist).await {
+    // Búsqueda libre solo si las anteriores no encontraron nada, con un tope
+    // corto para no dejar el panel esperando.
+    if !artist.is_empty() {
+        if let Ok(free) = tokio::time::timeout(
+            Duration::from_secs(3),
+            lrclib_search_free(&http, title, artist),
+        )
+        .await
+        {
+            if let Some(track) = pick_best(free, duration) {
+                let result = to_result(track);
+                if !result.lines.is_empty() || result.instrumental {
+                    return Ok(result);
+                }
+            }
+        }
+    }
+
+    if let Some(plain) = plain {
         return Ok(plain);
     }
 
@@ -126,6 +99,78 @@ pub async fn fetch(title: &str, artist: &str, album: &str, duration: f64) -> Res
         message: "No encontramos la letra para esta canción.".to_string(),
         ..Default::default()
     })
+}
+
+async fn lrclib_get(
+    http: &reqwest::Client,
+    title: &str,
+    artist: &str,
+    album: &str,
+    duration: f64,
+) -> Option<LrcLibTrack> {
+    let mut query: Vec<(&str, String)> = vec![
+        ("track_name", title.to_string()),
+        ("artist_name", artist.to_string()),
+    ];
+    if !album.is_empty() {
+        query.push(("album_name", album.to_string()));
+    }
+    if duration.is_finite() && duration > 0.0 {
+        query.push(("duration", duration.round().max(1.0).to_string()));
+    }
+
+    let response = http
+        .get("https://lrclib.net/api/get")
+        .query(&query)
+        .send()
+        .await
+        .ok()?;
+
+    if !response.status().is_success() {
+        return None;
+    }
+
+    response.json::<LrcLibTrack>().await.ok()
+}
+
+async fn lrclib_search(
+    http: &reqwest::Client,
+    title: &str,
+    artist: &str,
+) -> Vec<LrcLibTrack> {
+    let artist_name = if artist.is_empty() { title } else { artist };
+
+    let response = http
+        .get("https://lrclib.net/api/search")
+        .query(&[("track_name", title), ("artist_name", artist_name)])
+        .send()
+        .await;
+
+    match response {
+        Ok(response) if response.status().is_success() => {
+            response.json::<Vec<LrcLibTrack>>().await.unwrap_or_default()
+        }
+        _ => Vec::new(),
+    }
+}
+
+async fn lrclib_search_free(
+    http: &reqwest::Client,
+    title: &str,
+    artist: &str,
+) -> Vec<LrcLibTrack> {
+    let response = http
+        .get("https://lrclib.net/api/search")
+        .query(&[("q", format!("{title} {artist}"))])
+        .send()
+        .await;
+
+    match response {
+        Ok(response) if response.status().is_success() => {
+            response.json::<Vec<LrcLibTrack>>().await.unwrap_or_default()
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Último recurso: letra sin sincronizar desde la API pública de Lyrics.ovh.

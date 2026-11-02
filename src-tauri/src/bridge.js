@@ -148,18 +148,17 @@
     var position = el && isFinite(el.currentTime) ? el.currentTime : 0;
 
     if (barDuration > 0) {
-      // La barra del reproductor refleja la pista activa. Si el <video> aún
-      // conserva la duración/posición de la canción anterior, priorizamos la
-      // barra para que el contador no se quede al final del tema nuevo.
-      if (Math.abs(barDuration - videoDuration) > 2) {
-        duration = barDuration;
-        position = barPosition;
-      } else if (
+      // La barra oficial es la base. El video solo se usa como refinamiento
+      // cuando está dentro de una ventana coherente con la barra; si no,
+      // mandan los valores de la barra.
+      duration = barDuration;
+
+      if (
         position < 0 ||
-        position > barDuration + 1 ||
-        Math.abs(position - barPosition) > 5
+        !isFinite(position) ||
+        Math.abs(position - barPosition) > 3
       ) {
-        position = barPosition;
+        position = Math.max(0, Math.min(barPosition, barDuration));
       }
     }
 
