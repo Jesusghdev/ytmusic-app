@@ -2,6 +2,8 @@
 
 Aplicación de escritorio para Windows construida con **Tauri 2 + Vue 3 + TypeScript**. YouTube Music está **integrado dentro de la misma ventana**, junto a la letra sincronizada y el control remoto:
 
+> **Descargar para Windows:** [Última versión publicada](https://github.com/Jesusghdev/ytmusic-app/releases/latest)
+
 - **Tu cuenta de Google**: inicia sesión una vez y la sesión queda guardada en el equipo.
 - **Navegación integrada**: busca canciones, abre tu biblioteca, álbumes y playlists sin abrir otra ventana.
 - **Letra sincronizada** estilo Spotify: línea activa iluminada, resaltado progresivo y salto al hacer clic en una línea.
