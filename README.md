@@ -41,6 +41,15 @@ El panel lateral **solo se cierra con su botón X**. Los accesos **Letra** y **R
 - El puerto del control remoto se elige automáticamente entre `47821` y `47860`.
 - Cerrar la ventana principal cierra la aplicación.
 
+### Seguridad y privacidad
+
+- El repositorio no contiene contraseñas, cookies ni claves de API.
+- El inicio de sesión con Google ocurre en la web oficial dentro de WebView2. La sesión/cookies las guarda WebView2 en la carpeta local del usuario (por ejemplo, `%LOCALAPPDATA%\com.jebus.ytmusic`), fuera del proyecto y de GitHub. No se incluyen en el instalador.
+- La app no crea un historial propio ni registra los títulos de las canciones en archivos; el estado del reproductor vive en memoria. WebView2 mantiene su caché, historial de navegación y cookies como cualquier navegador.
+- El control remoto es un servidor HTTP local **sin autenticación**: cualquier dispositivo en la misma red que conozca la IP/puerto puede ver el tema actual y controlar la reproducción. No expone la cuenta de Google ni archivos. Úsalo solo en redes de confianza.
+- Para buscar letras se envían título, artista, álbum y duración a LRCLIB y Lyrics.ovh. No se envían datos de la cuenta.
+- Proyecto no oficial, no afiliado a Google/YouTube. YouTube Music y su logo son marcas de Google; el icono se usa solo para identificar la aplicación.
+
 ### Atajos de teclado
 
 Los atajos funcionan cuando el foco está en la barra o en el panel de la app (dentro de YouTube Music se usan los atajos del propio sitio).
