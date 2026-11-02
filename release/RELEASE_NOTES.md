@@ -1,6 +1,13 @@
-# YouTube Music Desktop v0.2.0
+# YouTube Music Desktop v0.2.1
 
-Primer release público para **Windows x64**.
+Actualización para **Windows x64**.
+
+## Novedades en v0.2.1
+
+- Corregido el contador de tiempo y la sincronización de la letra al pasar **automáticamente** a la siguiente canción.
+- El tiempo vuelve a **0:00** al empezar un tema nuevo, incluso si la siguiente canción no tiene letra disponible.
+- La detección de duración prioriza la barra oficial de YouTube Music para evitar duraciones incorrectas.
+- Reintentos automáticos en la búsqueda de letras cuando una fuente falla temporalmente.
 
 ## Descargar
 
@@ -30,7 +37,7 @@ Primer release público para **Windows x64**.
 - **Sesión:** el inicio de sesión se hace en la web oficial dentro de WebView2. La sesión se guarda localmente en el equipo, no en este repositorio ni en el instalador.
 - **Letras:** no todas las canciones tienen letra disponible; la cobertura depende de las fuentes públicas.
 - **Sin actualizaciones automáticas:** las próximas versiones se descargan manualmente desde Releases.
-- Primer release: puede contener errores. Los reportes e ideas son bienvenidos en Issues.
+- Los reportes e ideas son bienvenidos en Issues.
 
 ## Instalación rápida
 
