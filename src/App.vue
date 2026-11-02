@@ -28,6 +28,10 @@ const nowWall = ref(Date.now());
 const anchorPosition = ref(0);
 const anchorAt = ref(performance.now());
 const anchorPlaying = ref(false);
+// Duración "estable": solo se cambia cuando la nueva duración se repite en
+// varias lecturas seguidas. Evita que el máximo de la barra parpadee durante
+// el cambio automático (YouTube Music actualiza la barra y el video a destiempo).
+const stableDuration = ref(0);
 const artFailed = ref(false);
 const commandError = ref("");
 const isMaximized = ref(false);
@@ -49,7 +53,7 @@ let lyricsRequest = 0;
 let lyricsTimer: number | undefined;
 let lyricsRetryTimer: number | undefined;
 let lyricsAttempt = 0;
-const MAX_LYRICS_ATTEMPTS = 3;
+const MAX_LYRICS_ATTEMPTS = 1;
 let errorTimer: number | undefined;
 
 const remote = ref<RemoteInfo | null>(null);
@@ -59,6 +63,14 @@ const qrData = ref("");
 const copied = ref(false);
 
 let seekGuardUntil = 0;
+// Ventana de asentamiento tras un cambio automático de canción: durante este
+// tiempo se ignoran posiciones heredadas de la pista anterior.
+let holdUntil = 0;
+let holdDuration = 0;
+let holdSong = "";
+let settleUntil = 0;
+let pendingDuration = 0;
+let pendingDurationSamples = 0;
 let unlisten: UnlistenFn | null = null;
 let unlistenResize: UnlistenFn | null = null;
 let unlistenScale: UnlistenFn | null = null;
@@ -118,22 +130,23 @@ const backdropStyle = computed<Record<string, string>>(
 
 const trackKey = computed(() => {
   if (!player.value.title) return "";
+  // La duración y el ID no forman parte de la identidad: durante el cambio
+  // automático ambos pueden pertenecer temporalmente a la pista anterior.
   return [
-    player.value.video_id,
     player.value.title,
     player.value.artist,
     player.value.album,
-    Math.round(player.value.duration),
   ].join("|");
 });
 
 function songKeyOf(state: PlayerState): string {
-  if (state.video_id) return `v:${state.video_id}`;
-  return `m:${state.title}|${state.artist}|${state.album}`;
-}
-
-function playbackKeyOf(state: PlayerState): string {
-  return [state.video_id, state.title, state.artist, state.album].join("|");
+  const title = state.title.trim().toLowerCase();
+  const artist = state.artist.trim().toLowerCase();
+  const album = state.album.trim().toLowerCase();
+  if (!title && !state.video_id) return "";
+  // El ID de YouTube Music puede cambiar antes o después que los metadatos.
+  // Usarlo aquí hace que una sola transición se procese como varias.
+  return `${title}|${artist}|${album}`;
 }
 
 function currentSongKey(): string {
@@ -194,40 +207,165 @@ function formatTime(seconds: number): string {
   return `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
+function refreshDuration(incoming: number): number {
+  if (!(incoming > 0)) return stableDuration.value;
+
+  const current = stableDuration.value;
+  if (current <= 0) {
+    stableDuration.value = incoming;
+    pendingDuration = 0;
+    pendingDurationSamples = 0;
+    return stableDuration.value;
+  }
+
+  if (Math.abs(incoming - current) <= 1.5) {
+    pendingDuration = 0;
+    pendingDurationSamples = 0;
+    return current;
+  }
+
+  // Cambio de pista: no lo damos por bueno hasta verlo repetido. Una duración
+  // transitoria (barra del tema nuevo con el video del anterior) no llega a
+  // mostrarse y el máximo de la barra no parpadea.
+  if (Math.abs(incoming - pendingDuration) <= 0.75) {
+    pendingDurationSamples += 1;
+  } else {
+    pendingDuration = incoming;
+    pendingDurationSamples = 1;
+  }
+
+  if (pendingDurationSamples >= 2) {
+    stableDuration.value = incoming;
+    pendingDuration = 0;
+    pendingDurationSamples = 0;
+  }
+
+  return stableDuration.value;
+}
+
 function applyPlayer(next: PlayerState) {
+  const now = performance.now();
   const previous = player.value;
-  const previousTrack = playbackKeyOf(previous);
-  const nextTrack = playbackKeyOf(next);
-  const trackChanged = previousTrack !== nextTrack;
+  const previousSong = songKeyOf(previous);
+  const nextSong = songKeyOf(next);
+  const songChanged =
+    !!previousSong && !!nextSong && previousSong !== nextSong;
 
-  const previousAtEnd =
-    previous.duration > 0 &&
-    previous.position >= previous.duration - 3;
-  const nextAtEnd = next.duration > 0 && next.position >= next.duration - 3;
-  const durationChanged =
-    previous.duration > 0 &&
+  const shown = position.value;
+  const previousDuration = stableDuration.value || previous.duration;
+  const durationJump =
     next.duration > 0 &&
-    Math.abs(next.duration - previous.duration) > 1;
+    previousDuration > 0 &&
+    Math.abs(next.duration - previousDuration) > 1.5;
+  const previousNearEnd =
+    previousDuration > 0 && shown >= previousDuration - 10;
+  const realStart = next.position <= 5;
 
-  // Cambio de pista o transición de fin de canción en la que YouTube Music
-  // actualiza la duración de la barra antes que el elemento de video.
-  const endTransition =
-    previousAtEnd && nextAtEnd && durationChanged;
+  // La canción anterior terminó y empieza otra. Solo ocurre de forma natural
+  // cuando llevábamos un rato al final del tema; ahí YouTube Music puede
+  // publicar la duración nueva con la posición vieja.
+  const transitionStarted =
+    previousDuration > 0 &&
+    previousNearEnd &&
+    (durationJump || songChanged);
 
-  player.value = next;
+  if (transitionStarted) {
+    settleUntil = Math.max(settleUntil, now + 4500);
 
-  if (trackChanged || endTransition) {
-    seekGuardUntil = 0;
-    anchorPosition.value = next.position <= 3 ? next.position : 0;
-    anchorAt.value = performance.now();
+    // La duración que llega en la transición es la del tema nuevo: la
+    // mostramos ya para que el máximo de la barra no salte después.
+    if (next.duration > 0) {
+      stableDuration.value = next.duration;
+      pendingDuration = 0;
+      pendingDurationSamples = 0;
+    }
+  }
+
+  // Posición heredada del tema anterior (p. ej. 4:06 recortado a 2:49):
+  // congelamos el reloj en cero hasta que llegue la posición real del nuevo.
+  if (transitionStarted && !realStart) {
+    holdUntil = Math.max(holdUntil, now + 2200);
+    holdDuration = next.duration;
+    holdSong = nextSong;
+
+    if (next.duration > 0) {
+      stableDuration.value = next.duration;
+      pendingDuration = 0;
+      pendingDurationSamples = 0;
+    }
+  }
+
+  const duration = refreshDuration(next.duration);
+
+  if (now < holdUntil && nextSong === holdSong) {
+    player.value = { ...next, duration, position: 0 };
+
+    // El tema nuevo ya arrancó de verdad: aceptamos su posición y dejamos de
+    // mostrar cero. Las posiciones heredadas se siguen ignorando durante la
+    // ventana de asentamiento.
+    const durationSettled =
+      !(holdDuration > 0) ||
+      Math.abs(next.duration - holdDuration) <= 1.5 ||
+      next.duration < holdDuration - 1.5;
+
+    if (realStart && next.duration > 0 && durationSettled) {
+      holdUntil = 0;
+      stableDuration.value = next.duration;
+      pendingDuration = 0;
+      pendingDurationSamples = 0;
+      player.value = {
+        ...next,
+        duration: next.duration,
+        position: Math.max(0, next.position),
+      };
+      anchorPosition.value = Math.max(0, next.position);
+      anchorAt.value = now;
+      anchorPlaying.value = next.playing;
+      return;
+    }
+
+    anchorPosition.value = 0;
+    anchorAt.value = now;
     anchorPlaying.value = next.playing;
     return;
   }
 
-  if (performance.now() < seekGuardUntil) return;
+  if (now < holdUntil && nextSong !== holdSong) {
+    holdUntil = 0;
+  }
 
-  anchorPosition.value = next.position;
-  anchorAt.value = performance.now();
+  player.value = { ...next, duration, position: next.position };
+
+  if (now < seekGuardUntil) return;
+
+  const expected =
+    anchorPosition.value +
+    (anchorPlaying.value ? (now - anchorAt.value) / 1000 : 0);
+
+  // Estados atrasados/duplicados del cambio automático: durante el
+  // asentamiento ignoramos saltos grandes y retrocesos cerca del inicio.
+  if (now < settleUntil) {
+    if (next.position > expected + 12) return;
+    if (expected < 12 && next.position < expected - 3) return;
+  }
+
+  const incomingPosition =
+    duration > 0 ? Math.min(next.position, duration) : next.position;
+  const drift = incomingPosition - expected;
+
+  // Las lecturas del elemento de vídeo y de la barra oficial llegan
+  // alternadas durante la reproducción. Reanclar el reloj en cada lectura
+  // hace que el contador retroceda varios segundos y que las letras se
+  // recentren continuamente. Solo corregimos un desfase real; las pequeñas
+  // diferencias normales se dejan al reloj local.
+  if (
+    !next.playing ||
+    next.playing !== anchorPlaying.value ||
+    Math.abs(drift) > 1.5
+  ) {
+    anchorPosition.value = incomingPosition;
+    anchorAt.value = now;
+  }
   anchorPlaying.value = next.playing;
 }
 
@@ -265,6 +403,10 @@ function seekTo(seconds: number) {
 
   seekDrag.value = null;
   seekGuardUntil = performance.now() + 900;
+  // Un salto pedido por el usuario manda: no debe confundirse con los
+  // estados atrasados del cambio automático.
+  holdUntil = 0;
+  settleUntil = 0;
   anchorPosition.value = value;
   anchorAt.value = performance.now();
   anchorPlaying.value = player.value.playing;
@@ -582,7 +724,7 @@ function scheduleLyricsRetry(song: string): boolean {
       if (currentSongKey() !== song) return;
       void loadLyrics(true, true);
     },
-    1200 * lyricsAttempt,
+    1400,
   );
   return true;
 }
@@ -602,7 +744,7 @@ async function loadLyrics(force = false, isRetry = false) {
   lyricsSongKey.value = song;
   lyricsRequest += 1;
   const request = lyricsRequest;
-  const duration = player.value.duration;
+  const duration = stableDuration.value || player.value.duration;
   lyricsLoading.value = true;
 
   let retrying = false;
@@ -626,12 +768,10 @@ async function loadLyrics(force = false, isRetry = false) {
       return;
     }
 
-    // Si no se encontró letra, reintenta antes de mostrar el mensaje.
-    if (scheduleLyricsRetry(song)) {
-      retrying = true;
-      return;
-    }
-
+    // Sin letra: no reintentamos. Reintentar una búsqueda vacía solo hace que
+    // el panel tarde decenas de segundos en confirmar que no hay letra.
+    clearLyricsRetry();
+    lyricsAttempt = 0;
     const cached = lyricsCache.get(song);
     lyrics.value = cached ?? result;
   } catch (error) {
@@ -699,7 +839,7 @@ watch(trackKey, (key) => {
   lyricsLoading.value = true;
   lyricsTimer = window.setTimeout(() => {
     void loadLyrics(false);
-  }, 400);
+  }, 150);
 });
 
 watch(
