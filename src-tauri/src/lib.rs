@@ -25,26 +25,17 @@ pub fn ingest_state(app: &AppHandle, mut state: player::PlayerState) {
     state.sanitize();
     state.updated_at = player::now_ms();
 
-    let mut changed_title = None;
-
     if let Some(shared) = app.try_state::<Shared>() {
         if let Ok(mut guard) = shared.player.lock() {
             if guard.updated_at == 0 {
                 println!("[bridge] conectado con YouTube Music");
             }
-            if guard.title != state.title {
-                changed_title = Some(state.title.clone());
-            }
             *guard = state.clone();
         }
     }
 
-    if let Some(title) = changed_title {
-        if !title.is_empty() {
-            println!("[bridge] reproduciendo: {title}");
-        }
-    }
-
+    // No registramos el título de la canción para no dejar rastro del historial
+    // de reproducción en la consola.
     let _ = app.emit("player-state", &state);
 }
 
@@ -124,7 +115,6 @@ fn remote_info(app: AppHandle) -> Result<serde_json::Value, String> {
 pub fn run() {
     tauri::Builder::default()
         .manage(Shared::new())
-        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             remote::spawn(app.handle().clone());
 
