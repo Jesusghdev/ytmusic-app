@@ -3,7 +3,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import QRCode from "qrcode";
 import LyricsView from "./components/LyricsView.vue";
 import type { Lyrics, PlayerState, RemoteInfo } from "./types";
@@ -34,7 +33,6 @@ const commandError = ref("");
 const isMaximized = ref(false);
 const bigScreen = ref(false);
 const seekDrag = ref<number | null>(null);
-const volumeDrag = ref<number | null>(null);
 
 const siteSlot = ref<HTMLElement | null>(null);
 const siteInited = ref(false);
@@ -45,6 +43,8 @@ const panelTab = ref<"lyrics" | "remote">("lyrics");
 const lyrics = ref<Lyrics | null>(null);
 const lyricsLoading = ref(false);
 const lyricsKey = ref("");
+const lyricsSongKey = ref("");
+const lyricsCache = new Map<string, Lyrics>();
 let lyricsRequest = 0;
 let lyricsTimer: number | undefined;
 let errorTimer: number | undefined;
@@ -72,12 +72,6 @@ const connected = computed(
     nowWall.value - Number(player.value.updated_at) < 12_000,
 );
 
-const connectionLabel = computed(() => {
-  if (connected.value) return "Conectado";
-  if (siteError.value) return "Error";
-  return "YouTube Music";
-});
-
 const position = computed(() => {
   if (seekDrag.value !== null) {
     const duration = player.value.duration;
@@ -99,8 +93,6 @@ const position = computed(() => {
   return Math.max(0, value);
 });
 
-const volume = computed(() => volumeDrag.value ?? player.value.volume ?? 1);
-
 const seekValue = computed(() => seekDrag.value ?? position.value);
 
 const progressPercent = computed(() => {
@@ -110,10 +102,6 @@ const progressPercent = computed(() => {
 
 const seekStyle = computed<Record<string, string>>(() => ({
   "--progress": `${progressPercent.value}%`,
-}));
-
-const volumeStyle = computed<Record<string, string>>(() => ({
-  "--progress": `${Math.round(volume.value * 100)}%`,
 }));
 
 const hasArtwork = computed(() => !!player.value.artwork && !artFailed.value);
@@ -135,6 +123,12 @@ const trackKey = computed(() => {
     Math.round(player.value.duration),
   ].join("|");
 });
+
+function currentSongKey(): string {
+  const current = player.value;
+  if (current.video_id) return `v:${current.video_id}`;
+  return `m:${current.title}|${current.artist}|${current.album}`;
+}
 
 const activeIndex = computed(() => {
   const data = lyrics.value;
@@ -250,33 +244,13 @@ function onSeekChange(event: Event) {
   seekTo(Number((event.target as HTMLInputElement).value));
 }
 
-function onVolumeInput(event: Event) {
-  const value = Number((event.target as HTMLInputElement).value) / 100;
-  volumeDrag.value = value;
-  player.value = { ...player.value, volume: value };
-}
-
-function onVolumeChange(event: Event) {
-  const value = Number((event.target as HTMLInputElement).value) / 100;
-  volumeDrag.value = null;
-  player.value = { ...player.value, volume: value };
-  void send("volume", value);
-}
-
-function toggleMute() {
-  const value = player.value.volume > 0.001 ? 0 : 1;
-  volumeDrag.value = null;
-  player.value = { ...player.value, volume: value };
-  void send("volume", value);
-}
-
 async function enterBigScreen() {
   if (bigScreen.value) return;
 
   // Activa la vista primero para que cualquier actualización de límites del
-  // webview incrustado no vuelva a mostrarlo.
+  // webview incrustado no vuelva a mostrarlo. El panel lateral no se toca:
+  // queda detrás de la vista grande y vuelve a aparecer al salir.
   bigScreen.value = true;
-  panelOpen.value = false;
 
   try {
     await invoke("set_ytm_visible", { visible: false });
@@ -338,22 +312,6 @@ function toggleBigScreen() {
   }
 }
 
-async function openMusixmatch() {
-  const query = [player.value.title, player.value.artist]
-    .filter(Boolean)
-    .join(" ");
-
-  if (!query) return;
-
-  try {
-    await openUrl(
-      `https://www.musixmatch.com/search/${encodeURIComponent(query)}`,
-    );
-  } catch (error) {
-    flashError(String(error));
-  }
-}
-
 function sendBounds() {
   if (!siteInited.value || bigScreen.value) return;
   const slot = siteSlot.value;
@@ -404,12 +362,6 @@ async function initSite() {
 
 function openPanel(tab: "lyrics" | "remote") {
   if (bigScreen.value) return;
-
-  if (panelOpen.value && panelTab.value === tab) {
-    panelOpen.value = false;
-    void nextTick(scheduleBounds);
-    return;
-  }
 
   panelTab.value = tab;
   panelOpen.value = true;
@@ -576,12 +528,15 @@ function onKeydown(event: KeyboardEvent) {
 
 async function loadLyrics(force = false) {
   const key = trackKey.value;
-  if (!key) return;
-  if (!force && key === lyricsKey.value) return;
+  const song = currentSongKey();
+  if (!key || !song) return;
+  if (!force && key === lyricsKey.value && lyrics.value) return;
 
   lyricsKey.value = key;
+  lyricsSongKey.value = song;
   lyricsRequest += 1;
   const request = lyricsRequest;
+  const duration = player.value.duration;
   lyricsLoading.value = true;
 
   try {
@@ -589,11 +544,21 @@ async function loadLyrics(force = false) {
       title: player.value.title,
       artist: player.value.artist,
       album: player.value.album,
-      duration: player.value.duration,
+      duration,
     });
-    if (request === lyricsRequest) lyrics.value = result;
+
+    if (request !== lyricsRequest) return;
+    if (currentSongKey() !== song) return;
+
+    lyrics.value = result;
+
+    // Solo cachea resultados útiles para la misma canción. Si no se encontró
+    // letra, un cambio posterior del estado puede reintentar la búsqueda.
+    if (result.lines.length > 0 || result.instrumental) {
+      lyricsCache.set(song, result);
+    }
   } catch (error) {
-    if (request === lyricsRequest) {
+    if (request === lyricsRequest && currentSongKey() === song) {
       lyrics.value = {
         lines: [],
         synced: false,
@@ -609,18 +574,39 @@ async function loadLyrics(force = false) {
 
 watch(trackKey, (key) => {
   window.clearTimeout(lyricsTimer);
+
   if (!key) {
     lyricsRequest += 1;
     lyrics.value = null;
     lyricsKey.value = "";
+    lyricsSongKey.value = "";
     lyricsLoading.value = false;
     return;
   }
 
-  if (key === lyricsKey.value) return;
+  const song = currentSongKey();
+  const cached = lyricsCache.get(song);
+  const songChanged = song !== lyricsSongKey.value;
+
+  if (songChanged) {
+    lyricsRequest += 1;
+    lyricsSongKey.value = song;
+  }
+
+  if (cached) {
+    lyricsKey.value = key;
+    lyrics.value = cached;
+    lyricsLoading.value = false;
+    return;
+  }
+
+  if (!songChanged && key === lyricsKey.value && lyrics.value) return;
+
+  lyrics.value = null;
+  lyricsLoading.value = true;
   lyricsTimer = window.setTimeout(() => {
     void loadLyrics(false);
-  }, 350);
+  }, 400);
 });
 
 watch(
@@ -694,17 +680,10 @@ onBeforeUnmount(() => {
     <div class="backdrop" :style="backdropStyle"></div>
 
     <header class="topbar" data-tauri-drag-region="deep">
-      <div class="brand">
-        <div class="brand-text">
-          <strong>YouTube Music</strong>
-          <span>Escritorio</span>
-        </div>
-      </div>
-
       <div class="topbar-actions">
-        <span class="status" :class="{ live: connected }">
+        <span v-if="!connected" class="status offline">
           <span class="status-dot"></span>
-          {{ connectionLabel }}
+          Desconectado
         </span>
 
         <span v-if="commandError" class="title-error" :title="commandError">
@@ -922,7 +901,6 @@ onBeforeUnmount(() => {
             :has-track="hasTrack"
             :message="lyrics?.message ?? ''"
             @seek="seekTo"
-            @search-web="openMusixmatch"
           />
 
           <div v-else class="remote-wrap">
@@ -1003,7 +981,6 @@ onBeforeUnmount(() => {
             :message="lyrics?.message ?? ''"
             :windowed="true"
             @seek="seekTo"
-            @search-web="openMusixmatch"
           />
         </section>
 
@@ -1087,42 +1064,6 @@ onBeforeUnmount(() => {
             <span>{{ formatTime(player.duration) }}</span>
           </div>
 
-          <div class="big-volume">
-            <button
-              class="big-mute"
-              type="button"
-              :title="volume > 0 ? 'Silenciar' : 'Activar sonido'"
-              @click="toggleMute"
-            >
-              <svg
-                v-if="volume > 0.001"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path
-                  d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4z"
-                />
-              </svg>
-              <svg v-else viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="M3 9v6h4l5 5V4L7 9H3zm16.1-1.6-1.4-1.4L15 8.6l-2.7-2.7-1.4 1.4L13.6 10l-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4-2.7-2.7z"
-                />
-              </svg>
-            </button>
-            <input
-              class="big-volume-slider"
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              :value="Math.round(volume * 100)"
-              :style="volumeStyle"
-              aria-label="Volumen"
-              @input="onVolumeInput"
-              @change="onVolumeChange"
-            />
-            <span>{{ Math.round(volume * 100) }}</span>
-          </div>
         </aside>
       </div>
 
@@ -1230,32 +1171,6 @@ button {
   user-select: none;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.brand-text {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.16;
-  min-width: 0;
-}
-
-.brand-text strong {
-  font-size: 14.5px;
-  font-weight: 750;
-  letter-spacing: -0.01em;
-}
-
-.brand-text span {
-  font-size: 10px;
-  color: var(--muted);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
 .topbar-actions {
   display: flex;
   align-items: center;
@@ -1270,7 +1185,7 @@ button {
   gap: 7px;
   padding: 0 8px 0 2px;
   font-size: 11.5px;
-  color: var(--muted);
+  color: #ff9aa9;
   white-space: nowrap;
 }
 
@@ -1278,16 +1193,8 @@ button {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #f0a020;
-  box-shadow: 0 0 10px rgba(240, 160, 32, 0.55);
-  transition:
-    background 0.3s ease,
-    box-shadow 0.3s ease;
-}
-
-.status.live .status-dot {
-  background: #39d98a;
-  box-shadow: 0 0 10px rgba(57, 217, 138, 0.65);
+  background: #ff4d5e;
+  box-shadow: 0 0 10px rgba(255, 77, 94, 0.6);
 }
 
 .title-error {
@@ -2100,97 +2007,6 @@ button {
   cursor: default;
 }
 
-.big-volume {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: min(100%, 270px);
-  color: rgba(255, 255, 255, 0.55);
-  font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
-}
-
-.big-volume span {
-  width: 24px;
-  text-align: right;
-  flex: none;
-}
-
-.big-mute {
-  width: 30px;
-  height: 30px;
-  flex: none;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.65);
-  cursor: pointer;
-}
-
-.big-mute:hover {
-  color: #fff;
-}
-
-.big-mute svg {
-  width: 18px;
-  height: 18px;
-  fill: currentColor;
-}
-
-.big-volume-slider {
-  -webkit-appearance: none;
-  appearance: none;
-  flex: 1;
-  min-width: 0;
-  height: 16px;
-  margin: 0;
-  background: transparent;
-  cursor: pointer;
-}
-
-.big-volume-slider::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0.66) var(--progress, 100%),
-    rgba(255, 255, 255, 0.15) var(--progress, 100%)
-  );
-}
-
-.big-volume-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 11px;
-  height: 11px;
-  margin-top: -3.5px;
-  border: none;
-  border-radius: 50%;
-  background: #fff;
-}
-
-.big-volume-slider::-moz-range-track {
-  height: 4px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.15);
-}
-
-.big-volume-slider::-moz-range-progress {
-  height: 4px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.66);
-}
-
-.big-volume-slider::-moz-range-thumb {
-  width: 11px;
-  height: 11px;
-  border: none;
-  border-radius: 50%;
-  background: #fff;
-}
-
 .big-error {
   position: absolute;
   z-index: 10;
@@ -2256,10 +2072,6 @@ button {
 }
 
 @media (max-width: 1180px) {
-  .status {
-    display: none;
-  }
-
   .side-panel {
     width: 380px;
     --lyric-size: clamp(15px, 1.6vw, 20px);

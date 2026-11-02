@@ -16,7 +16,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: "seek", time: number): void;
-  (event: "search-web"): void;
 }>();
 
 const viewport = ref<HTMLElement | null>(null);
@@ -72,6 +71,16 @@ function onLine(line: LyricLine) {
   emit("seek", line.time);
 }
 
+function isOutsideWindow(index: number): boolean {
+  if (!props.windowed || !props.synced) return false;
+
+  const active = props.activeIndex;
+  if (active < 0 || active >= props.lines.length) return index > 2;
+
+  // 1 línea antes y como máximo 2 después de la línea actual.
+  return index < active - 1 || index > active + 2;
+}
+
 onMounted(() => {
   void nextTick(centerActiveLine);
 });
@@ -111,14 +120,6 @@ onBeforeUnmount(() => {
     <div v-else-if="!lines.length" class="state">
       <p>Sin letra disponible</p>
       <span>{{ message || "No encontramos la letra para esta canción." }}</span>
-      <button
-        v-if="hasTrack"
-        class="web-search"
-        type="button"
-        @click="emit('search-web')"
-      >
-        Buscar en Musixmatch
-      </button>
     </div>
 
     <div
@@ -144,6 +145,7 @@ onBeforeUnmount(() => {
             active: synced && index === activeIndex,
             past: synced && index < activeIndex,
             clickable: synced,
+            'out-of-window': isOutsideWindow(index),
           }"
           :style="synced && index === activeIndex ? activeStyle : undefined"
           @click="onLine(line)"
@@ -187,27 +189,6 @@ onBeforeUnmount(() => {
   color: var(--muted);
   max-width: 320px;
   line-height: 1.5;
-}
-
-.web-search {
-  margin-top: 10px;
-  height: 30px;
-  padding: 0 13px;
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.055);
-  color: rgba(255, 255, 255, 0.78);
-  font-size: 11.5px;
-  font-weight: 650;
-  cursor: pointer;
-  transition:
-    background 0.15s ease,
-    color 0.15s ease;
-}
-
-.web-search:hover {
-  background: rgba(255, 255, 255, 0.11);
-  color: #fff;
 }
 
 .lyrics-viewport {
@@ -258,6 +239,7 @@ onBeforeUnmount(() => {
  * línea actual, con más contexto hacia adelante que hacia atrás.
  */
 .lyrics-viewport.windowed {
+  padding-right: 5%;
   mask-image: linear-gradient(
     to bottom,
     transparent 0%,
@@ -279,6 +261,31 @@ onBeforeUnmount(() => {
     rgba(0, 0, 0, 0.34) 74%,
     transparent 84%,
     transparent 100%
+  );
+}
+
+.lyrics-viewport.windowed .line:not(.active) {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.lyrics-viewport.windowed .line.past {
+  color: rgba(255, 255, 255, 0.19);
+}
+
+.lyrics-viewport.windowed .line.active {
+  transform: scale(1.055);
+  filter:
+    drop-shadow(0 0 34px rgba(255, 59, 92, 0.3))
+    drop-shadow(0 4px 26px rgba(0, 0, 0, 0.5));
+}
+
+.lyrics-viewport.windowed .line.active span {
+  background-image: linear-gradient(
+    90deg,
+    #ffffff 0%,
+    #ffffff var(--p, 0%),
+    rgba(255, 255, 255, 0.66) var(--p, 0%),
+    rgba(255, 255, 255, 0.66) 100%
   );
 }
 
@@ -319,6 +326,11 @@ onBeforeUnmount(() => {
 
 .line.past {
   color: rgba(255, 255, 255, 0.26);
+}
+
+.line.out-of-window {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .line.active {

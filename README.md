@@ -28,9 +28,11 @@ npm run tauri dev
 3. Reproduce una canción: la barra del reproductor oficial queda en la parte inferior del área integrada.
 4. Pulsa **Letra** (o `L`) para abrir el panel lateral con la letra sincronizada.
 5. Pulsa **Remoto** (o `R`) para mostrar el código QR y escanearlo con el celular.
-6. Pulsa **Pantalla grande** (o `F`) para abrir la vista de reproducción a pantalla completa con la letra, la carátula y los controles. Se sale con el botón **Salir** o con `Esc`.
+6. Pulsa **Pantalla grande** (o `F`) para abrir la vista de reproducción a pantalla completa con la letra, la carátula y los controles. Se sale con el botón de salir de la esquina superior derecha o con `Esc`.
 
-La ventana no usa el marco nativo de Windows: la barra superior es parte de la app. Puedes arrastrar la ventana desde esa zona, hacer doble clic para maximizar y usar los botones de minimizar, maximizar/restaurar y cerrar de la esquina superior derecha. La barra superior incluye el título, los accesos a **Letra**, **Remoto** y **Pantalla grande**, y los controles de ventana.
+La ventana no usa el marco nativo de Windows: la barra superior es parte de la app. Puedes arrastrar la ventana desde esa zona, hacer doble clic para maximizar y usar los botones de minimizar, maximizar/restaurar y cerrar de la esquina superior derecha. La barra superior incluye los accesos a **Letra**, **Remoto** y **Pantalla grande**, el aviso de **Desconectado** cuando no hay conexión, y los controles de ventana.
+
+El panel lateral **solo se cierra con su botón X**. Los accesos **Letra** y **Remoto** lo abren o cambian de pestaña, y `Esc` únicamente sale de pantalla grande.
 
 ### Notas importantes
 
@@ -48,8 +50,8 @@ Los atajos funcionan cuando el foco está en la barra o en el panel de la app (d
 | `Espacio` | Reproducir / pausar |
 | `←` / `→` | Retroceder / avanzar 10 segundos |
 | `N` / `P` | Siguiente / anterior canción |
-| `L` | Abrir / cerrar el panel de letra |
-| `R` | Abrir / cerrar el control remoto |
+| `L` | Abrir el panel de letra |
+| `R` | Abrir el control remoto |
 | `F` | Entrar / salir de pantalla grande |
 | `Esc` | Salir de pantalla grande |
 
@@ -57,8 +59,7 @@ Los atajos funcionan cuando el foco está en la barra o en el panel de la app (d
 
 - La app busca primero letras sincronizadas en **LRCLIB**.
 - Si no las encuentra, intenta obtener la letra sin sincronizar desde la API pública de **Lyrics.ovh**.
-- Si tampoco hay resultados, la vista de letra muestra un botón **Buscar en Musixmatch** que abre la búsqueda en el navegador.
-- Musixmatch **no ofrece una API pública gratuita** para integrar sus letras sincronizadas: su API es privada/comercial y requiere un convenio. Por eso no se raspa su web ni se usa su contenido sin licencia.
+- **LyricFind**, **Google** y **Musixmatch** no ofrecen una API pública gratuita para integrar sus letras: requieren licencia o un convenio comercial. La app no raspa sus webs ni usa su contenido sin licencia.
 
 ## Cómo funciona
 
