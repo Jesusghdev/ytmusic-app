@@ -35,3 +35,6 @@ Thumbs.db
 *.crt
 .tauri
 
+# Notas locales / roadmap privado
+ROADMAP.md
+
