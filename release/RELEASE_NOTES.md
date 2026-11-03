@@ -1,8 +1,19 @@
-# YouTube Music Desktop v0.2.2
+# YouTube Music Desktop v0.2.3
 
 Actualización para **Windows x64**.
 
-## Novedades en v0.2.2
+## Novedades en v0.2.3
+
+- Corregida la barra de reproducción y la selección de líneas de letra en
+  pantalla grande después de un cambio automático.
+- Corregida la sincronización entre el video nuevo y los metadatos de la
+  canción anterior durante búsquedas y cambios naturales.
+- Mejorada la búsqueda de letras para títulos con símbolos y créditos de
+  múltiples artistas.
+- Añadida precarga de letras de la siguiente canción cuando la cola de
+  YouTube Music expone sus metadatos.
+- Caché local persistente de hasta 200 canciones para evitar consultas
+  repetidas.
 
 - Corregido el caso raro al terminar una canción de forma **natural**: el contador tomaba la duración del siguiente tema pero se quedaba al final (por ejemplo, pasaba de `4:06 / 4:06` a `2:49 / 2:49`). Ahora se usa también la posición de la barra oficial de YouTube Music y se reinicia a `0:00`.
 - Se mantiene el reinicio del contador al cambiar automáticamente de canción, incluso si la siguiente no tiene letra.
