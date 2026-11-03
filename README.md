@@ -59,6 +59,25 @@ No necesitas instalar Rust ni Node.js. El instalador incluye la aplicación; sol
 > [!NOTE]
 > La aplicación no está firmada digitalmente. Windows puede mostrar SmartScreen; pulsa **Más información → Ejecutar de todas formas**. El código es abierto y puedes compilarlo tú mismo.
 
+## Capturas
+
+### Pantalla grande
+
+La vista de pantalla grande muestra la letra sincronizada junto con la carátula,
+el fondo adaptado a la canción y los controles de reproducción.
+
+<p align="center">
+  <img src="docs/screenshots/fullscreen-fatal.png" alt="Pantalla grande mostrando la canción FATAL" width="100%" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/fullscreen-rainbow-bap.png" alt="Pantalla grande mostrando la canción Rainbow Bap" width="100%" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/fullscreen-un-millon.png" alt="Pantalla grande mostrando la canción Un Millón" width="100%" />
+</p>
+
 ## Cómo funciona
 
 La aplicación integra la web oficial de YouTube Music en WebView2 y se comunica con ella mediante un puente local para leer el estado del reproductor, sincronizar la letra y enviar comandos. Las letras se consultan en **LRCLIB** (sincronizadas) y **Lyrics.ovh** (texto), con reintentos automáticos.
