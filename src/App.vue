@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import QRCode from "qrcode";
 import LyricsView from "./components/LyricsView.vue";
-import type { Lyrics, PlayerState, RemoteInfo } from "./types";
+import type { Lyrics, PlayerState, RemoteInfo, UpcomingTrack } from "./types";
 
 function emptyPlayer(): PlayerState {
   return {
@@ -19,6 +19,7 @@ function emptyPlayer(): PlayerState {
     playing: false,
     volume: 1,
     updated_at: 0,
+    next_track: null,
   };
 }
 
@@ -49,6 +50,9 @@ const lyricsLoading = ref(false);
 const lyricsKey = ref("");
 const lyricsSongKey = ref("");
 const lyricsCache = new Map<string, Lyrics>();
+const LYRICS_CACHE_KEY = "ytmusic-app:lyrics-cache:v1";
+const LYRICS_CACHE_LIMIT = 200;
+const LYRICS_CACHE_MAX_BYTES = 3_000_000;
 let lyricsRequest = 0;
 let lyricsTimer: number | undefined;
 let lyricsRetryTimer: number | undefined;
@@ -78,6 +82,86 @@ let clockTimer: number | undefined;
 let boundsFrame: number | undefined;
 let siteObserver: ResizeObserver | null = null;
 let bigScreenPoll: number | undefined;
+const lyricsPrefetches = new Set<string>();
+
+function restoreLyricsCache() {
+  try {
+    const raw = localStorage.getItem(LYRICS_CACHE_KEY);
+    if (!raw) return;
+
+    const stored = JSON.parse(raw) as Record<string, Lyrics>;
+    for (const [key, value] of Object.entries(stored)) {
+      if (
+        value &&
+        Array.isArray(value.lines) &&
+        typeof value.synced === "boolean" &&
+        typeof value.instrumental === "boolean"
+      ) {
+        lyricsCache.set(key, value);
+      }
+    }
+  } catch (error) {
+    console.warn("No se pudo restaurar la caché local de letras.", error);
+  }
+}
+
+function persistLyricsCache() {
+  try {
+    const entries = Array.from(lyricsCache.entries()).slice(
+      -LYRICS_CACHE_LIMIT,
+    );
+    let serialized = JSON.stringify(Object.fromEntries(entries));
+
+    while (serialized.length > LYRICS_CACHE_MAX_BYTES && entries.length > 1) {
+      entries.shift();
+      serialized = JSON.stringify(Object.fromEntries(entries));
+    }
+
+    localStorage.setItem(LYRICS_CACHE_KEY, serialized);
+  } catch (error) {
+    console.warn("No se pudo guardar la caché local de letras.", error);
+  }
+}
+
+function trackKeyOf(track: UpcomingTrack): string {
+  return [track.title, track.artist, track.album]
+    .map((value) => value.trim().toLowerCase())
+    .join("|");
+}
+
+function prefetchLyrics(track: UpcomingTrack) {
+  const song = trackKeyOf(track);
+  if (
+    !track.title.trim() ||
+    lyricsCache.has(song) ||
+    lyricsPrefetches.has(song)
+  ) {
+    return;
+  }
+
+  lyricsPrefetches.add(song);
+  void invoke<Lyrics>("get_lyrics", {
+    title: track.title,
+    artist: track.artist,
+    album: track.album,
+    duration: track.duration,
+  })
+    .then((result) => {
+      if (result.lines.length > 0 || result.instrumental) {
+        lyricsCache.set(song, result);
+        persistLyricsCache();
+      }
+    })
+    .catch((error) => {
+      console.warn(
+        "No se pudo precargar la letra de la siguiente canción.",
+        error,
+      );
+    })
+    .finally(() => {
+      lyricsPrefetches.delete(song);
+    });
+}
 
 const hasTrack = computed(() => player.value.title.trim().length > 0);
 
@@ -334,9 +418,9 @@ function applyPlayer(next: PlayerState) {
     holdUntil = 0;
   }
 
-  player.value = { ...next, duration, position: next.position };
-
   if (now < seekGuardUntil) return;
+
+  player.value = { ...next, duration, position: next.position };
 
   const expected =
     anchorPosition.value +
@@ -402,7 +486,7 @@ function seekTo(seconds: number) {
   const value = Math.max(0, duration > 0 ? Math.min(seconds, duration) : seconds);
 
   seekDrag.value = null;
-  seekGuardUntil = performance.now() + 900;
+  seekGuardUntil = performance.now() + 1800;
   // Un salto pedido por el usuario manda: no debe confundirse con los
   // estados atrasados del cambio automático.
   holdUntil = 0;
@@ -765,6 +849,7 @@ async function loadLyrics(force = false, isRetry = false) {
       lyricsAttempt = 0;
       lyrics.value = result;
       lyricsCache.set(song, result);
+      persistLyricsCache();
       return;
     }
 
@@ -849,9 +934,23 @@ watch(
   },
 );
 
+watch(
+  () => player.value.next_track,
+  (track) => {
+    if (!track?.title) return;
+    window.setTimeout(() => {
+      if (player.value.next_track === track) {
+        prefetchLyrics(track);
+      }
+    }, 350);
+  },
+  { immediate: true },
+);
+
 onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
   window.addEventListener("resize", scheduleBounds);
+  restoreLyricsCache();
 
   clockTimer = window.setInterval(() => {
     nowTick.value = performance.now();

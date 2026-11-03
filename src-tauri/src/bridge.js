@@ -14,6 +14,10 @@
   var PORT = __PORT__;
   var STATE_URL = "http://127.0.0.1:" + PORT + "/api/state";
   var ipcUnavailable = false;
+  var trackSignature = "";
+  var trackChangedAt = 0;
+  var pendingSeek = null;
+  var pendingSeekUntil = 0;
 
   function video() {
     return (
@@ -136,6 +140,52 @@
     return "";
   }
 
+  function readNextTrack(currentVideoId) {
+    try {
+      var items = document.querySelectorAll(
+        "ytmusic-player-queue-item, ytmusic-player-queue-item-renderer"
+      );
+
+      for (var i = 0; i < items.length; i += 1) {
+        var item = items[i];
+        var link = item.querySelector('a[href*="watch?v="]');
+        var itemId = "";
+        if (link) {
+          try {
+            itemId = new URL(link.href, location.href).searchParams.get("v") || "";
+          } catch (error) {
+            itemId = "";
+          }
+        }
+        if (itemId && currentVideoId && itemId === currentVideoId) continue;
+
+        var titleEl = item.querySelector(
+          ".song-title, .title, yt-formatted-string.title"
+        );
+        var bylineEl = item.querySelector(".byline");
+        var title = clean(titleEl && titleEl.textContent, 300);
+        var byline = clean(bylineEl && bylineEl.textContent, 600);
+        if (!title) continue;
+
+        var parts = byline
+          .split("\u2022")
+          .map(function (part) { return part.trim(); })
+          .filter(Boolean);
+
+        return {
+          title: title,
+          artist: parts[0] || "",
+          album: parts[1] || "",
+          duration: 0,
+        };
+      }
+    } catch (error) {
+      /* La cola puede cambiar mientras YouTube actualiza el DOM. */
+    }
+
+    return null;
+  }
+
   function readState() {
     var meta = readMeta();
     var el = video();
@@ -146,6 +196,10 @@
     var barPosition = bar.position;
     var duration = videoDuration;
     var position = el && isFinite(el.currentTime) ? el.currentTime : 0;
+    var videoMatchesBar =
+      videoDuration <= 0 ||
+      barDuration <= 0 ||
+      Math.abs(videoDuration - barDuration) <= 3;
 
     if (barDuration > 0) {
       // La barra oficial es la base. El video solo se usa como refinamiento
@@ -154,6 +208,7 @@
       duration = barDuration;
 
       if (
+        !videoMatchesBar ||
         position < 0 ||
         !isFinite(position) ||
         Math.abs(position - barPosition) > 3
@@ -172,16 +227,24 @@
       }
     }
 
+    var nextSignature = [meta.title, meta.artist, meta.album].join("|");
+    if (nextSignature && nextSignature !== trackSignature) {
+      trackSignature = nextSignature;
+      trackChangedAt = Date.now();
+    }
+
+    var currentVideoId = getVideoId();
     return {
       title: meta.title,
       artist: meta.artist,
       album: meta.album,
       artwork: meta.artwork,
-      video_id: getVideoId(),
+      video_id: currentVideoId,
       duration: duration,
       position: position,
       playing: playing,
       volume: el && isFinite(el.volume) ? el.volume : 1,
+      next_track: readNextTrack(currentVideoId),
     };
   }
 
@@ -312,6 +375,23 @@
     seek: function (seconds) {
       var el = video();
       if (!el) return;
+      var state = readState();
+      var durationReady =
+        !state.duration ||
+        !isFinite(el.duration) ||
+        Math.abs(el.duration - state.duration) <= 3;
+      var trackReady =
+        !trackChangedAt || Date.now() - trackChangedAt >= 1200;
+
+      // Durante el cambio automático la UI puede recibir los metadatos nuevos
+      // antes de que YouTube reemplace el elemento de vídeo. No debemos buscar
+      // en ese elemento porque todavía reproduce la canción anterior.
+      if (!durationReady || !trackReady) {
+        pendingSeek = seconds;
+        pendingSeekUntil = Date.now() + 3000;
+        return;
+      }
+
       var max = isFinite(el.duration) ? el.duration : seconds;
       el.currentTime = Math.max(0, Math.min(seconds, max));
       sendState();
@@ -329,6 +409,32 @@
 
     sendNow: sendState,
   };
+
+  window.setInterval(function () {
+    if (pendingSeek === null) return;
+    if (Date.now() > pendingSeekUntil) {
+      pendingSeek = null;
+      return;
+    }
+
+    var value = pendingSeek;
+    var el = video();
+    var state = readState();
+    var durationReady =
+      el &&
+      (!state.duration ||
+        !isFinite(el.duration) ||
+        Math.abs(el.duration - state.duration) <= 3);
+    var trackReady =
+      !trackChangedAt || Date.now() - trackChangedAt >= 1200;
+
+    if (!el || !durationReady || !trackReady) return;
+
+    pendingSeek = null;
+    var max = isFinite(el.duration) ? el.duration : value;
+    el.currentTime = Math.max(0, Math.min(value, max));
+    sendState();
+  }, 150);
 
   function forceDarkTheme() {
     if (location.hostname !== "music.youtube.com") return;

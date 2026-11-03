@@ -9,6 +9,14 @@ export interface PlayerState {
   playing: boolean;
   volume: number;
   updated_at: number;
+  next_track?: UpcomingTrack | null;
+}
+
+export interface UpcomingTrack {
+  title: string;
+  artist: string;
+  album: string;
+  duration: number;
 }
 
 export interface LyricLine {

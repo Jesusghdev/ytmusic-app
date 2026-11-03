@@ -18,6 +18,10 @@ pub struct Lyrics {
 
 #[derive(Clone, Debug, Deserialize)]
 struct LrcLibTrack {
+    #[serde(rename = "trackName")]
+    track_name: Option<String>,
+    #[serde(rename = "artistName")]
+    artist_name: Option<String>,
     duration: Option<f64>,
     instrumental: Option<bool>,
     #[serde(rename = "plainLyrics")]
@@ -53,41 +57,46 @@ pub async fn fetch(
 
     // Las fuentes se consultan a la vez. Antes se encadenaban: una canción
     // sin letra podía tardar más de 30 s entre consultas y reintentos.
-    let (exact, candidates, plain) = tokio::join!(
+    let normalized_title = normalize_query(title);
+    let normalized_artist = normalize_query(artist);
+    let (exact, exact_without_duration, candidates, plain) = tokio::join!(
         lrclib_get(&http, title, artist, album, duration),
+        lrclib_get(&http, title, artist, "", 0.0),
         lrclib_search(&http, title, artist),
         fetch_plain_fallback(&http, title, artist),
     );
 
-    if let Some(track) = exact {
-        let result = to_result(track);
-        if !result.lines.is_empty() || result.instrumental {
-            return Ok(result);
-        }
-    }
-
-    if let Some(track) = pick_best(candidates, duration) {
-        let result = to_result(track);
-        if !result.lines.is_empty() || result.instrumental {
-            return Ok(result);
-        }
-    }
-
-    // Búsqueda libre solo si las anteriores no encontraron nada, con un tope
-    // corto para no dejar el panel esperando.
-    if !artist.is_empty() {
-        if let Ok(free) = tokio::time::timeout(
-            Duration::from_secs(3),
-            lrclib_search_free(&http, title, artist),
-        )
-        .await
-        {
-            if let Some(track) = pick_best(free, duration) {
-                let result = to_result(track);
-                if !result.lines.is_empty() || result.instrumental {
-                    return Ok(result);
-                }
+    for track in [exact, exact_without_duration].into_iter().flatten() {
+        if matches_request(&track, title, artist) {
+            let result = to_result(track);
+            if !result.lines.is_empty() || result.instrumental {
+                return Ok(result);
             }
+        }
+    }
+
+    if let Some(track) = pick_best(candidates, title, artist, duration) {
+        let result = to_result(track);
+        if !result.lines.is_empty() || result.instrumental {
+            return Ok(result);
+        }
+    }
+
+    // Algunas canciones aparecen en LRCLIB solo con una consulta libre y sin
+    // puntuación. Se prueban variantes normalizadas únicamente como fallback
+    // para no golpear innecesariamente el límite de la API.
+    let (normalized_candidates, free, title_only) = tokio::join!(
+        lrclib_search_free(&http, &normalized_title, &normalized_artist),
+        lrclib_search_free(&http, title, artist),
+        lrclib_search_free(&http, &normalized_title, ""),
+    );
+    let mut fallback_candidates = normalized_candidates;
+    fallback_candidates.extend(free);
+    fallback_candidates.extend(title_only);
+    if let Some(track) = pick_best(fallback_candidates, title, artist, duration) {
+        let result = to_result(track);
+        if !result.lines.is_empty() || result.instrumental {
+            return Ok(result);
         }
     }
 
@@ -229,8 +238,76 @@ async fn fetch_plain_fallback(
     })
 }
 
-fn score(track: &LrcLibTrack, duration: f64) -> f64 {
+fn normalize_query(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() || character.is_whitespace() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalized_equal(left: &str, right: &str) -> bool {
+    normalize_query(left).eq_ignore_ascii_case(&normalize_query(right))
+}
+
+fn artist_tokens(value: &str) -> Vec<String> {
+    normalize_query(value)
+        .split_whitespace()
+        .filter(|token| *token != "y" && *token != "and")
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+fn artist_overlap(left: &str, right: &str) -> usize {
+    let left = artist_tokens(left);
+    let right = artist_tokens(right);
+    left.iter()
+        .filter(|token| right.iter().any(|candidate| candidate == *token))
+        .count()
+}
+
+fn matches_request(track: &LrcLibTrack, title: &str, artist: &str) -> bool {
+    let title_matches = track
+        .track_name
+        .as_deref()
+        .map(|value| normalized_equal(value, title))
+        .unwrap_or(false);
+    let requested_artists = artist_tokens(artist);
+    let artist_matches = requested_artists.is_empty()
+        || track.artist_name.as_deref().map_or(false, |value| {
+            normalized_equal(value, artist)
+                || artist_overlap(value, artist)
+                    >= requested_artists.len().div_ceil(2).max(1)
+        });
+    title_matches && artist_matches
+}
+
+fn score(track: &LrcLibTrack, title: &str, artist: &str, duration: f64) -> f64 {
     let mut score = 0.0;
+
+    if track
+        .track_name
+        .as_deref()
+        .map(|value| normalized_equal(value, title))
+        .unwrap_or(false)
+    {
+        score -= 2_000.0;
+    }
+    if let Some(value) = track.artist_name.as_deref() {
+        if normalized_equal(value, artist) {
+            score -= 1_000.0;
+        } else {
+            score -= (artist_overlap(value, artist) as f64) * 250.0;
+        }
+    }
 
     if track
         .synced_lyrics
@@ -261,7 +338,12 @@ fn score(track: &LrcLibTrack, duration: f64) -> f64 {
     score
 }
 
-fn pick_best(mut tracks: Vec<LrcLibTrack>, duration: f64) -> Option<LrcLibTrack> {
+fn pick_best(
+    mut tracks: Vec<LrcLibTrack>,
+    title: &str,
+    artist: &str,
+    duration: f64,
+) -> Option<LrcLibTrack> {
     tracks.retain(|track| {
         track.instrumental == Some(true)
             || track
@@ -277,8 +359,8 @@ fn pick_best(mut tracks: Vec<LrcLibTrack>, duration: f64) -> Option<LrcLibTrack>
     });
 
     tracks.into_iter().min_by(|left, right| {
-        score(left, duration)
-            .partial_cmp(&score(right, duration))
+        score(left, title, artist, duration)
+            .partial_cmp(&score(right, title, artist, duration))
             .unwrap_or(std::cmp::Ordering::Equal)
     })
 }
@@ -431,5 +513,23 @@ mod tests {
     fn ignores_metadata() {
         let lines = parse_lrc("[ar:Queen]\n[00:01.00]Hola");
         assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn matches_collaborating_artist_credits() {
+        let track = LrcLibTrack {
+            track_name: Some("Estar Así Siempre".to_string()),
+            artist_name: Some("Nsqk, Julieta Venegas, mosca".to_string()),
+            duration: Some(249.0),
+            instrumental: Some(false),
+            plain_lyrics: None,
+            synced_lyrics: Some("[00:01.00]Hola".to_string()),
+        };
+
+        assert!(matches_request(
+            &track,
+            "# Estar Así Siempre",
+            "Nsqk y Julieta Venegas"
+        ));
     }
 }
