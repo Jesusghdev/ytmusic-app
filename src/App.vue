@@ -418,9 +418,9 @@ function applyPlayer(next: PlayerState) {
     holdUntil = 0;
   }
 
-  if (now < seekGuardUntil) return;
-
   player.value = { ...next, duration, position: next.position };
+
+  if (now < seekGuardUntil) return;
 
   const expected =
     anchorPosition.value +

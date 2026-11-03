@@ -18,6 +18,7 @@
   var trackChangedAt = 0;
   var pendingSeek = null;
   var pendingSeekUntil = 0;
+  var pendingSeekStartedAt = 0;
 
   function video() {
     return (
@@ -389,10 +390,11 @@
       if (!durationReady || !trackReady) {
         pendingSeek = seconds;
         pendingSeekUntil = Date.now() + 3000;
+        pendingSeekStartedAt = Date.now();
         return;
       }
 
-      var max = isFinite(el.duration) ? el.duration : seconds;
+      var max = state.duration > 0 ? state.duration : el.duration;
       el.currentTime = Math.max(0, Math.min(seconds, max));
       sendState();
     },
@@ -414,6 +416,7 @@
     if (pendingSeek === null) return;
     if (Date.now() > pendingSeekUntil) {
       pendingSeek = null;
+      pendingSeekStartedAt = 0;
       return;
     }
 
@@ -428,11 +431,13 @@
     var trackReady =
       !trackChangedAt || Date.now() - trackChangedAt >= 1200;
 
-    if (!el || !durationReady || !trackReady) return;
+    if (!el || !trackReady) return;
+    if (!durationReady && Date.now() - pendingSeekStartedAt < 1800) return;
 
     pendingSeek = null;
-    var max = isFinite(el.duration) ? el.duration : value;
+    var max = state.duration > 0 ? state.duration : el.duration;
     el.currentTime = Math.max(0, Math.min(value, max));
+    pendingSeekStartedAt = 0;
     sendState();
   }, 150);
 
