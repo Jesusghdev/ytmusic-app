@@ -9,6 +9,18 @@ use tauri::{
 const BRIDGE_JS: &str = include_str!("bridge.js");
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UpcomingTrack {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub artist: String,
+    #[serde(default)]
+    pub album: String,
+    #[serde(default)]
+    pub duration: f64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PlayerState {
     #[serde(default)]
     pub title: String,
@@ -30,6 +42,8 @@ pub struct PlayerState {
     pub volume: f64,
     #[serde(default)]
     pub updated_at: u64,
+    #[serde(default)]
+    pub next_track: Option<UpcomingTrack>,
 }
 
 impl PlayerState {
@@ -44,6 +58,19 @@ impl PlayerState {
         self.title = clean_text(&self.title, 300);
         self.artist = clean_text(&self.artist, 300);
         self.album = clean_text(&self.album, 300);
+        if let Some(next) = &mut self.next_track {
+            next.title = clean_text(&next.title, 300);
+            next.artist = clean_text(&next.artist, 300);
+            next.album = clean_text(&next.album, 300);
+            next.duration = if next.duration.is_finite() && next.duration > 0.0 {
+                next.duration.min(86_400.0)
+            } else {
+                0.0
+            };
+            if next.title.is_empty() {
+                self.next_track = None;
+            }
+        }
 
         if !(self.artwork.starts_with("https://") || self.artwork.starts_with("http://")) {
             self.artwork.clear();
