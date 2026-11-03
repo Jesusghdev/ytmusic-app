@@ -1,8 +1,8 @@
 [package]
 name = "ytmusic-app"
-version = "0.2.5"
+version = "0.2.6"
 description = "A Tauri App"
-authors = ["you"]
+authors = ["Jesusghdev"]
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

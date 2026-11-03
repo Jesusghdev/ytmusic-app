@@ -1,8 +1,17 @@
-# YouTube Music Desktop v0.2.5
+# YouTube Music Desktop v0.2.6
 
 Actualización para **Windows x64**.
 
-## Novedades en v0.2.5
+## Novedades en v0.2.6
+
+- Mejorada la precisión de las letras para evitar versiones incorrectas,
+  coincidencias parciales de artistas y resultados de otra duración.
+- Añadido reintento automático para resultados temporales sin letra y
+  renovación de la caché local.
+- Integrado el identificador público de aplicación de LRCLIB.
+- Corregido el centrado inicial de la primera línea en la vista lateral.
+- Ocultada la barra de scroll en pantalla completa sin desactivar el scroll.
+- Actualizados los metadatos de la aplicación para no incluir correo personal.
 
 - Mejorada la precisión de selección de letras: se rechazan versiones con
   duración incorrecta o artistas incompletos.
