@@ -1130,6 +1130,7 @@ onBeforeUnmount(() => {
       </div>
 
       <aside v-if="panelOpen" class="side-panel">
+        <div class="panel-backdrop" :style="backdropStyle"></div>
         <div class="panel-head">
           <div class="panel-tabs">
             <button
@@ -1233,6 +1234,8 @@ onBeforeUnmount(() => {
             :loading="lyricsLoading"
             :has-track="hasTrack"
             :message="lyrics?.message ?? ''"
+            :windowed="lyrics?.synced ?? false"
+            :windowed-lines="4"
             @seek="seekTo"
           />
 
@@ -1695,21 +1698,46 @@ button {
 .side-panel {
   --lyric-size: clamp(16px, 1.45vw, 23px);
   --lyric-gap: 15px;
+  position: relative;
   width: 420px;
   flex: none;
   display: flex;
   flex-direction: column;
   min-height: 0;
   border-left: 1px solid rgba(255, 255, 255, 0.085);
-  background: linear-gradient(
-    180deg,
-    rgba(17, 17, 21, 0.96),
-    rgba(8, 8, 10, 0.985)
-  );
+  background: rgba(8, 8, 10, 0.82);
   box-shadow: -22px 0 60px rgba(0, 0, 0, 0.34);
 }
 
+.panel-backdrop {
+  position: absolute;
+  inset: -10%;
+  z-index: 0;
+  background-position: center;
+  background-size: cover;
+  filter: blur(8px) saturate(1.2);
+  opacity: 0.52;
+  transform: scale(1.04);
+  transition:
+    background-image 0.7s ease,
+    opacity 0.7s ease;
+  pointer-events: none;
+}
+
+.panel-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(10, 10, 13, 0.46),
+    rgba(8, 8, 10, 0.86)
+  );
+}
+
 .panel-head {
+  position: relative;
+  z-index: 1;
   flex: none;
   height: 48px;
   display: flex;
@@ -1800,6 +1828,8 @@ button {
 }
 
 .panel-now {
+  position: relative;
+  z-index: 1;
   flex: none;
   display: flex;
   align-items: center;
@@ -1866,6 +1896,8 @@ button {
 }
 
 .panel-body {
+  position: relative;
+  z-index: 1;
   flex: 1;
   min-height: 0;
   display: flex;
