@@ -41,6 +41,8 @@ pub struct PlayerState {
     #[serde(default)]
     pub volume: f64,
     #[serde(default)]
+    pub liked: bool,
+    #[serde(default)]
     pub updated_at: u64,
     #[serde(default)]
     pub next_track: Option<UpcomingTrack>,
@@ -256,6 +258,7 @@ pub fn eval_command(app: &AppHandle, action: &str, value: Option<f64>) -> Result
         "toggle" => "window.__ytm && window.__ytm.toggle()".to_string(),
         "next" => "window.__ytm && window.__ytm.next()".to_string(),
         "prev" => "window.__ytm && window.__ytm.prev()".to_string(),
+        "like" => "window.__ytm && window.__ytm.like()".to_string(),
         "seek" => {
             let seconds = value
                 .filter(|value| value.is_finite())

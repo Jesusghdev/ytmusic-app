@@ -8,6 +8,7 @@ export interface PlayerState {
   position: number;
   playing: boolean;
   volume: number;
+  liked: boolean;
   updated_at: number;
   next_track?: UpcomingTrack | null;
 }

@@ -187,6 +187,36 @@
     return null;
   }
 
+  function readLikeStatus() {
+    var selectors = [
+      "ytmusic-player-bar ytmusic-like-button-renderer #like-button",
+      "ytmusic-player-bar ytmusic-like-button-renderer button[aria-label*='Like']",
+      "ytmusic-player-bar button[aria-label='Like']",
+      "ytmusic-player-bar button[aria-label='Me gusta']",
+    ];
+
+    for (var index = 0; index < selectors.length; index += 1) {
+      var button = document.querySelector(selectors[index]);
+      if (!button) continue;
+
+      var pressed = button.getAttribute("aria-pressed");
+      if (pressed === "true") return true;
+      if (pressed === "false") return false;
+
+      var label = (
+        button.getAttribute("aria-label") ||
+        button.getAttribute("title") ||
+        ""
+      ).toLowerCase();
+      if (label.indexOf("remove like") >= 0 || label.indexOf("quitar me gusta") >= 0) {
+        return true;
+      }
+      return false;
+    }
+
+    return false;
+  }
+
   function readState() {
     var meta = readMeta();
     var el = video();
@@ -245,6 +275,7 @@
       position: position,
       playing: playing,
       volume: el && isFinite(el.volume) ? el.volume : 1,
+      liked: readLikeStatus(),
       next_track: readNextTrack(currentVideoId),
     };
   }
@@ -316,6 +347,16 @@
   }
 
   window.__ytm = {
+    like: function () {
+      if (readLikeStatus()) return;
+      clickAny([
+        "ytmusic-player-bar ytmusic-like-button-renderer #like-button",
+        "ytmusic-player-bar ytmusic-like-button-renderer button[aria-label*='Like']",
+        "ytmusic-player-bar button[aria-label='Like']",
+        "ytmusic-player-bar button[aria-label='Me gusta']",
+      ]);
+      window.setTimeout(sendState, 250);
+    },
     play: function () {
       var el = video();
       if (el) {

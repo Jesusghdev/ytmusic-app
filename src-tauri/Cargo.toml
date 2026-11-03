@@ -1,6 +1,6 @@
 [package]
 name = "ytmusic-app"
-version = "0.2.6"
+version = "0.2.7"
 description = "A Tauri App"
 authors = ["Jesusghdev"]
 edition = "2024"
