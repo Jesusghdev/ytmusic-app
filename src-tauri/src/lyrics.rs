@@ -41,7 +41,7 @@ fn client() -> Result<reqwest::Client, String> {
 
     reqwest::Client::builder()
         .default_headers(headers)
-        .user_agent("YouTube-Music-Desktop/0.2.4 (https://github.com/Jesusghdev/ytmusic-app)")
+        .user_agent("YouTube-Music-Desktop/0.2.5 (https://github.com/Jesusghdev/ytmusic-app)")
         .timeout(Duration::from_secs(5))
         .connect_timeout(Duration::from_secs(3))
         .build()
