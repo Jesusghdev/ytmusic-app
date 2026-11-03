@@ -44,14 +44,15 @@ function onScroll() {
 }
 
 function centerActiveLine() {
-  if (!props.synced || props.activeIndex < 0) {
+  if (!props.synced || props.lines.length === 0) {
     offset.value = 0;
     return;
   }
 
+  const targetIndex = Math.max(props.activeIndex, 0);
   const container = viewport.value;
   const line = container?.querySelector<HTMLElement>(
-    `[data-line="${props.activeIndex}"]`,
+    `[data-line="${targetIndex}"]`,
   );
 
   if (!container || !line) return;

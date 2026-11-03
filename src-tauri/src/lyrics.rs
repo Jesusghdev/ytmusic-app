@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+const LRCLIB_APP_ID: &str = "sO-N_zayeBAXUHP5OVWGZwpGsMHO0rJz7mwoO6z6xYw";
+
 #[derive(Clone, Debug, Serialize)]
 pub struct LyricLine {
     pub time: f64,
@@ -31,8 +33,15 @@ struct LrcLibTrack {
 }
 
 fn client() -> Result<reqwest::Client, String> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        "Lrclib-App-Id",
+        reqwest::header::HeaderValue::from_static(LRCLIB_APP_ID),
+    );
+
     reqwest::Client::builder()
-        .user_agent("ytmusic-desktop/0.2 (app de escritorio personal)")
+        .default_headers(headers)
+        .user_agent("YouTube-Music-Desktop/0.2.4 (https://github.com/Jesusghdev/ytmusic-app)")
         .timeout(Duration::from_secs(5))
         .connect_timeout(Duration::from_secs(3))
         .build()
@@ -66,11 +75,25 @@ pub async fn fetch(
         fetch_plain_fallback(&http, title, artist),
     );
 
-    for track in [exact, exact_without_duration].into_iter().flatten() {
-        if matches_request(&track, title, artist) {
+    if let Some(track) = exact {
+        if matches_request(&track, title, artist, duration) {
             let result = to_result(track);
             if !result.lines.is_empty() || result.instrumental {
                 return Ok(result);
+            }
+        }
+    }
+
+    // Sin duración, /api/get puede devolver otra edición del mismo título.
+    // Cuando YouTube Music sí proporciona duración, esa respuesta no es
+    // suficientemente precisa para aceptarla.
+    if duration <= 0.0 {
+        if let Some(track) = exact_without_duration {
+            if matches_request(&track, title, artist, 0.0) {
+                let result = to_result(track);
+                if !result.lines.is_empty() || result.instrumental {
+                    return Ok(result);
+                }
             }
         }
     }
@@ -274,20 +297,44 @@ fn artist_overlap(left: &str, right: &str) -> usize {
         .count()
 }
 
-fn matches_request(track: &LrcLibTrack, title: &str, artist: &str) -> bool {
+fn duration_difference(track: &LrcLibTrack, duration: f64) -> Option<f64> {
+    if duration <= 0.0 {
+        return None;
+    }
+
+    track.duration.map(|value| (value - duration).abs())
+}
+
+fn artist_matches(track_artist: Option<&str>, requested_artist: &str) -> bool {
+    let requested_artists = artist_tokens(requested_artist);
+    if requested_artists.is_empty() {
+        return true;
+    }
+
+    track_artist.map_or(false, |value| {
+        normalized_equal(value, requested_artist)
+            || artist_overlap(value, requested_artist) == requested_artists.len()
+    })
+}
+
+fn matches_request(
+    track: &LrcLibTrack,
+    title: &str,
+    artist: &str,
+    duration: f64,
+) -> bool {
     let title_matches = track
         .track_name
         .as_deref()
         .map(|value| normalized_equal(value, title))
         .unwrap_or(false);
-    let requested_artists = artist_tokens(artist);
-    let artist_matches = requested_artists.is_empty()
-        || track.artist_name.as_deref().map_or(false, |value| {
-            normalized_equal(value, artist)
-                || artist_overlap(value, artist)
-                    >= requested_artists.len().div_ceil(2).max(1)
-        });
-    title_matches && artist_matches
+    let duration_matches = duration_difference(track, duration)
+        .map(|difference| difference <= 2.0)
+        .unwrap_or(duration <= 0.0);
+
+    title_matches
+        && artist_matches(track.artist_name.as_deref(), artist)
+        && duration_matches
 }
 
 fn score(track: &LrcLibTrack, title: &str, artist: &str, duration: f64) -> f64 {
@@ -345,7 +392,7 @@ fn pick_best(
     duration: f64,
 ) -> Option<LrcLibTrack> {
     tracks.retain(|track| {
-        track.instrumental == Some(true)
+        let has_lyrics = track.instrumental == Some(true)
             || track
                 .synced_lyrics
                 .as_deref()
@@ -355,7 +402,18 @@ fn pick_best(
                 .plain_lyrics
                 .as_deref()
                 .map(|text| !text.trim().is_empty())
-                .unwrap_or(false)
+                .unwrap_or(false);
+        let title_matches = track
+            .track_name
+            .as_deref()
+            .map(|value| normalized_equal(value, title))
+            .unwrap_or(false);
+        let artist_matches = artist_matches(track.artist_name.as_deref(), artist);
+        let duration_matches = duration_difference(track, duration)
+            .map(|difference| difference <= 8.0)
+            .unwrap_or(duration <= 0.0);
+
+        has_lyrics && title_matches && artist_matches && duration_matches
     });
 
     tracks.into_iter().min_by(|left, right| {
@@ -529,7 +587,46 @@ mod tests {
         assert!(matches_request(
             &track,
             "# Estar Así Siempre",
-            "Nsqk y Julieta Venegas"
+            "Nsqk y Julieta Venegas",
+            249.0
+        ));
+    }
+
+    #[test]
+    fn rejects_same_title_with_wrong_duration() {
+        let track = LrcLibTrack {
+            track_name: Some("Estar Así Siempre".to_string()),
+            artist_name: Some("Nsqk, Julieta Venegas".to_string()),
+            duration: Some(223.0),
+            instrumental: Some(false),
+            plain_lyrics: None,
+            synced_lyrics: Some("[00:01.00]Otra versión".to_string()),
+        };
+
+        assert!(!matches_request(
+            &track,
+            "Estar Así Siempre",
+            "Nsqk y Julieta Venegas",
+            249.0
+        ));
+    }
+
+    #[test]
+    fn rejects_partial_artist_match() {
+        let track = LrcLibTrack {
+            track_name: Some("Estar Así Siempre".to_string()),
+            artist_name: Some("Nsqk".to_string()),
+            duration: Some(249.0),
+            instrumental: Some(false),
+            plain_lyrics: None,
+            synced_lyrics: Some("[00:01.00]Colaboración diferente".to_string()),
+        };
+
+        assert!(!matches_request(
+            &track,
+            "Estar Así Siempre",
+            "Nsqk y Julieta Venegas",
+            249.0
         ));
     }
 }

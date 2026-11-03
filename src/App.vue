@@ -50,7 +50,7 @@ const lyricsLoading = ref(false);
 const lyricsKey = ref("");
 const lyricsSongKey = ref("");
 const lyricsCache = new Map<string, Lyrics>();
-const LYRICS_CACHE_KEY = "ytmusic-app:lyrics-cache:v1";
+const LYRICS_CACHE_KEY = "ytmusic-app:lyrics-cache:v2";
 const LYRICS_CACHE_LIMIT = 200;
 const LYRICS_CACHE_MAX_BYTES = 3_000_000;
 let lyricsRequest = 0;
@@ -853,8 +853,13 @@ async function loadLyrics(force = false, isRetry = false) {
       return;
     }
 
-    // Sin letra: no reintentamos. Reintentar una búsqueda vacía solo hace que
-    // el panel tarde decenas de segundos en confirmar que no hay letra.
+    // LRCLIB puede responder temporalmente sin resultado mientras termina de
+    // indexar o durante un cambio automático de canción.
+    if (scheduleLyricsRetry(song)) {
+      retrying = true;
+      return;
+    }
+
     clearLyricsRetry();
     lyricsAttempt = 0;
     const cached = lyricsCache.get(song);
