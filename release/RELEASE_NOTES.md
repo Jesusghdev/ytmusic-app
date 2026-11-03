@@ -1,8 +1,14 @@
-# YouTube Music Desktop v0.2.6
+# YouTube Music Desktop v0.2.7
 
 Actualización para **Windows x64**.
 
-## Novedades en v0.2.6
+## Novedades en v0.2.7
+
+- El token del control remoto ahora se conserva entre reinicios, por lo que
+  los accesos directos creados desde el QR siguen funcionando.
+- El control remoto exige el token para consultar el estado y enviar comandos.
+- La caché local de letras admite hasta 400 canciones sin superar el límite
+  aproximado de 3 MB.
 
 - Mejorada la precisión de las letras para evitar versiones incorrectas,
   coincidencias parciales de artistas y resultados de otra duración.

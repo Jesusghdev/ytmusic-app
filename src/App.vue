@@ -18,6 +18,7 @@ function emptyPlayer(): PlayerState {
     position: 0,
     playing: false,
     volume: 1,
+    liked: false,
     updated_at: 0,
     next_track: null,
   };
@@ -479,6 +480,10 @@ function togglePlay() {
   anchorPlaying.value = next;
 
   void send(next ? "play" : "pause");
+}
+
+function toggleLike() {
+  void send("like");
 }
 
 function seekTo(seconds: number) {
@@ -1363,6 +1368,21 @@ onBeforeUnmount(() => {
             </button>
 
             <button
+              class="big-ctrl like-ctrl"
+              :class="{ liked: player.liked }"
+              type="button"
+              :title="player.liked ? 'Quitar Me gusta' : 'Marcar como Me gusta'"
+              :aria-label="player.liked ? 'Quitar Me gusta' : 'Marcar como Me gusta'"
+              @click="toggleLike"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 21.2 3.8 13a5.8 5.8 0 0 1 8.2-8.2L12 4.8l.1-.1A5.8 5.8 0 0 1 20.2 13z"
+                />
+              </svg>
+            </button>
+
+            <button
               class="big-play"
               type="button"
               :title="player.playing ? 'Pausar (espacio)' : 'Reproducir (espacio)'"
@@ -1626,6 +1646,27 @@ button {
 
 .window-control:active {
   background: rgba(255, 255, 255, 0.15);
+}
+
+.big-ctrl.liked {
+  color: #ff6b83;
+  background: rgba(255, 59, 92, 0.14);
+}
+
+.big-ctrl.liked:hover {
+  color: #ff9aac;
+  background: rgba(255, 59, 92, 0.22);
+}
+
+.big-ctrl.like-ctrl svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+}
+
+.big-ctrl.like-ctrl.liked svg {
+  fill: currentColor;
 }
 
 .window-control.close:hover {
