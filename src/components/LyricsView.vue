@@ -12,6 +12,7 @@ const props = defineProps<{
   hasTrack: boolean;
   message: string;
   windowed?: boolean;
+  windowedLines?: number;
 }>();
 
 const emit = defineEmits<{
@@ -41,6 +42,16 @@ function centerActiveLine() {
 
   const target =
     line.offsetTop + line.offsetHeight / 2 - container.clientHeight * 0.42;
+  if (props.windowed) {
+    const maximum = Math.max(0, container.scrollHeight - container.clientHeight);
+    container.scrollTo({
+      top: Math.max(0, Math.min(target, maximum)),
+      behavior: "smooth",
+    });
+    offset.value = 0;
+    return;
+  }
+
   offset.value = Math.max(0, target);
 }
 
@@ -77,8 +88,9 @@ function isOutsideWindow(index: number): boolean {
   const active = props.activeIndex;
   if (active < 0 || active >= props.lines.length) return index > 2;
 
-  // 1 línea antes y como máximo 2 después de la línea actual.
-  return index < active - 1 || index > active + 2;
+  const visibleBefore = props.windowedLines ?? 1;
+  const visibleAfter = (props.windowedLines ?? 2) + 1;
+  return index < active - visibleBefore || index > active + visibleAfter;
 }
 
 onMounted(() => {
@@ -131,7 +143,7 @@ onBeforeUnmount(() => {
       <div
         class="lyrics-track"
         :style="
-          synced
+          synced && !windowed
             ? { transform: `translate3d(0, ${-offset}px, 0)` }
             : undefined
         "
@@ -239,7 +251,10 @@ onBeforeUnmount(() => {
  * línea actual, con más contexto hacia adelante que hacia atrás.
  */
 .lyrics-viewport.windowed {
+  overflow-y: auto;
   padding-right: 9%;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
   mask-image: linear-gradient(
     to bottom,
     transparent 0%,
@@ -264,6 +279,19 @@ onBeforeUnmount(() => {
   );
 }
 
+.lyrics-viewport.windowed::-webkit-scrollbar {
+  width: 7px;
+}
+
+.lyrics-viewport.windowed::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.lyrics-viewport.windowed::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
 .lyrics-viewport.windowed .line:not(.active) {
   color: rgba(255, 255, 255, 0.4);
 }
@@ -277,6 +305,15 @@ onBeforeUnmount(() => {
   filter:
     drop-shadow(0 0 34px rgba(255, 59, 92, 0.3))
     drop-shadow(0 4px 26px rgba(0, 0, 0, 0.5));
+}
+
+.lyrics-viewport.windowed .line.out-of-window {
+  opacity: 0.22;
+  pointer-events: auto;
+}
+
+.lyrics-viewport.windowed .lyrics-track {
+  padding: 70vh 0 70vh;
 }
 
 .lyrics-viewport.windowed .line.active span {
@@ -335,8 +372,10 @@ onBeforeUnmount(() => {
 
 .line.active {
   color: #fff;
-  transform: scale(1.035);
-  filter: drop-shadow(0 0 24px rgba(255, 59, 92, 0.16));
+  transform: scale(1.075);
+  filter:
+    drop-shadow(0 0 28px rgba(255, 59, 92, 0.24))
+    drop-shadow(0 3px 12px rgba(0, 0, 0, 0.28));
 }
 
 .line.active span {
