@@ -26,6 +26,22 @@ const activeStyle = computed(() => ({
 }) as Record<string, string>);
 
 let resizeObserver: ResizeObserver | null = null;
+let manualScrollUntil = 0;
+let manualScrollTimer: number | undefined;
+let programmaticScrollUntil = 0;
+
+const MANUAL_SCROLL_PAUSE = 5000;
+
+function onScroll() {
+  if (!props.windowed || performance.now() < programmaticScrollUntil) return;
+
+  manualScrollUntil = performance.now() + MANUAL_SCROLL_PAUSE;
+  window.clearTimeout(manualScrollTimer);
+  manualScrollTimer = window.setTimeout(() => {
+    manualScrollUntil = 0;
+    centerActiveLine();
+  }, MANUAL_SCROLL_PAUSE);
+}
 
 function centerActiveLine() {
   if (!props.synced || props.activeIndex < 0) {
@@ -39,11 +55,13 @@ function centerActiveLine() {
   );
 
   if (!container || !line) return;
+  if (props.windowed && performance.now() < manualScrollUntil) return;
 
   const target =
     line.offsetTop + line.offsetHeight / 2 - container.clientHeight * 0.42;
   if (props.windowed) {
     const maximum = Math.max(0, container.scrollHeight - container.clientHeight);
+    programmaticScrollUntil = performance.now() + 700;
     container.scrollTo({
       top: Math.max(0, Math.min(target, maximum)),
       behavior: "smooth",
@@ -109,6 +127,7 @@ watch(viewport, (element) => {
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect();
+  window.clearTimeout(manualScrollTimer);
 });
 </script>
 
@@ -139,6 +158,7 @@ onBeforeUnmount(() => {
       ref="viewport"
       class="lyrics-viewport"
       :class="{ static: !synced, windowed: windowed && synced }"
+      @scroll="onScroll"
     >
       <div
         class="lyrics-track"

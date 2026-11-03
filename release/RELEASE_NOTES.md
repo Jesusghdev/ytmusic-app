@@ -1,8 +1,13 @@
-# YouTube Music Desktop v0.2.3
+# YouTube Music Desktop v0.2.4
 
 Actualización para **Windows x64**.
 
-## Novedades en v0.2.3
+## Novedades en v0.2.4
+
+- Mejorada la vista lateral de letras con carátula de fondo, más contexto
+  visible y resaltado de la línea actual.
+- Añadido scroll manual con límites y pausa temporal del centrado automático
+  para buscar partes específicas de la letra sin perder la posición.
 
 - Corregida la barra de reproducción y la selección de líneas de letra en
   pantalla grande después de un cambio automático.
