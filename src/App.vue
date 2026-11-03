@@ -1321,6 +1321,7 @@ onBeforeUnmount(() => {
             :has-track="hasTrack"
             :message="lyrics?.message ?? ''"
             :windowed="true"
+            :hide-scrollbar="true"
             @seek="seekTo"
           />
         </section>

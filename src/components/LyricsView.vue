@@ -13,6 +13,7 @@ const props = defineProps<{
   message: string;
   windowed?: boolean;
   windowedLines?: number;
+  hideScrollbar?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -158,7 +159,11 @@ onBeforeUnmount(() => {
       v-else
       ref="viewport"
       class="lyrics-viewport"
-      :class="{ static: !synced, windowed: windowed && synced }"
+      :class="{
+        static: !synced,
+        windowed: windowed && synced,
+        'hide-scrollbar': hideScrollbar,
+      }"
       @scroll="onScroll"
     >
       <div
@@ -311,6 +316,14 @@ onBeforeUnmount(() => {
 .lyrics-viewport.windowed::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.2);
+}
+
+.lyrics-viewport.hide-scrollbar {
+  scrollbar-width: none;
+}
+
+.lyrics-viewport.hide-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 .lyrics-viewport.windowed .line:not(.active) {
