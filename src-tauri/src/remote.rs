@@ -1,6 +1,9 @@
-use crate::{player, Shared};
+use crate::{Shared, player};
+use rand::RngExt;
 use serde::Deserialize;
+use std::fs;
 use std::io::Read;
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Manager};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
@@ -8,6 +11,7 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 const REMOTE_HTML: &str = include_str!("remote.html");
 
 pub fn spawn(app: AppHandle) {
+    let token = load_or_generate_token(&app);
     let Some((server, port)) = bind() else {
         eprintln!("[remote] no se pudo abrir ningún puerto para el control remoto");
         return;
@@ -15,6 +19,9 @@ pub fn spawn(app: AppHandle) {
 
     if let Some(shared) = app.try_state::<Shared>() {
         shared.port.store(port, Ordering::SeqCst);
+        if let Ok(mut remote_token) = shared.remote_token.lock() {
+            *remote_token = token.clone();
+        }
     }
 
     println!("[remote] control remoto escuchando en el puerto {port}");
@@ -23,7 +30,7 @@ pub fn spawn(app: AppHandle) {
         .name("ytm-remote".to_string())
         .spawn(move || {
             for request in server.incoming_requests() {
-                handle(&app, request);
+                handle(&app, request, &token);
             }
         });
 
@@ -41,14 +48,23 @@ fn bind() -> Option<(Server, u16)> {
     None
 }
 
-fn handle(app: &AppHandle, mut request: Request) {
+fn handle(app: &AppHandle, mut request: Request, token: &str) {
     let method = request.method().clone();
-    let path = request
-        .url()
-        .split('?')
-        .next()
-        .unwrap_or("")
-        .to_string();
+    let path = request.url().split('?').next().unwrap_or("").to_string();
+    let authorized = request.url().split_once('?').is_some_and(|(_, query)| {
+        query.split('&').any(|parameter| {
+            parameter == format!("token={token}") || parameter == format!("remote_token={token}")
+        })
+    }) || request
+        .headers()
+        .iter()
+        .any(|header| header.field.equiv("X-Remote-Token") && header.value.as_str() == token);
+
+    if path != "/health" && !authorized {
+        let response = Response::from_string("No autorizado").with_status_code(StatusCode(401));
+        let _ = request.respond(response);
+        return;
+    }
 
     let mut body = String::new();
     let _ = request
@@ -58,11 +74,7 @@ fn handle(app: &AppHandle, mut request: Request) {
 
     let (status, content_type, payload) = match (method, path.as_str()) {
         (Method::Options, _) => (204, "text/plain; charset=utf-8", String::new()),
-        (Method::Get, "/") => (
-            200,
-            "text/html; charset=utf-8",
-            REMOTE_HTML.to_string(),
-        ),
+        (Method::Get, "/") => (200, "text/html; charset=utf-8", REMOTE_HTML.to_string()),
         (Method::Get, "/health") => (200, "text/plain; charset=utf-8", "ok".to_string()),
         (Method::Get, "/api/state") => {
             let state = app
@@ -100,11 +112,7 @@ fn handle(app: &AppHandle, mut request: Request) {
                     "application/json; charset=utf-8",
                     "{\"ok\":true}".to_string(),
                 ),
-                Err(error) => (
-                    400,
-                    "application/json; charset=utf-8",
-                    json_error(&error),
-                ),
+                Err(error) => (400, "application/json; charset=utf-8", json_error(&error)),
             },
             Err(error) => (
                 400,
@@ -112,7 +120,11 @@ fn handle(app: &AppHandle, mut request: Request) {
                 json_error(&format!("Comando inválido: {error}")),
             ),
         },
-        _ => (404, "text/plain; charset=utf-8", "No encontrado".to_string()),
+        _ => (
+            404,
+            "text/plain; charset=utf-8",
+            "No encontrado".to_string(),
+        ),
     };
 
     let data = payload.into_bytes();
@@ -121,7 +133,10 @@ fn handle(app: &AppHandle, mut request: Request) {
     for (name, value) in [
         ("Access-Control-Allow-Origin", "*"),
         ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
-        ("Access-Control-Allow-Headers", "Content-Type"),
+        (
+            "Access-Control-Allow-Headers",
+            "Content-Type, X-Remote-Token",
+        ),
         ("Access-Control-Allow-Private-Network", "true"),
         ("Access-Control-Max-Age", "86400"),
         ("Cache-Control", "no-store"),
@@ -155,9 +170,51 @@ pub fn lan_ip() -> Option<std::net::IpAddr> {
     Some(socket.local_addr().ok()?.ip())
 }
 
-pub fn remote_url(port: u16) -> String {
+pub fn remote_url_with_token(port: u16, token: &str) -> String {
     let host = lan_ip()
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| "127.0.0.1".to_string());
-    format!("http://{host}:{port}/")
+    format!("http://{host}:{port}/?token={token}")
+}
+
+fn generate_token() -> String {
+    let mut bytes = [0_u8; 32];
+    rand::rng().fill(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn token_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|path| path.join("remote-token"))
+}
+
+fn load_or_generate_token(app: &AppHandle) -> String {
+    let Some(path) = token_path(app) else {
+        eprintln!("[remote] no se pudo determinar la carpeta de configuración");
+        return generate_token();
+    };
+
+    if let Ok(token) = fs::read_to_string(&path) {
+        let token = token.trim().to_string();
+        if token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return token;
+        }
+        eprintln!("[remote] el token persistente no es válido; se generará uno nuevo");
+    }
+
+    let token = generate_token();
+    if let Some(parent) = path.parent() {
+        if let Err(error) = fs::create_dir_all(parent) {
+            eprintln!("[remote] no se pudo crear la configuración: {error}");
+            return token;
+        }
+    }
+
+    if let Err(error) = fs::write(&path, format!("{token}\n")) {
+        eprintln!("[remote] no se pudo guardar el token persistente: {error}");
+    }
+
+    token
 }

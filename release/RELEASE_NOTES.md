@@ -33,7 +33,7 @@ Actualización para **Windows x64**.
   múltiples artistas.
 - Añadida precarga de letras de la siguiente canción cuando la cola de
   YouTube Music expone sus metadatos.
-- Caché local persistente de hasta 200 canciones para evitar consultas
+- Caché local persistente de hasta 400 canciones para evitar consultas
   repetidas.
 
 - Corregido el caso raro al terminar una canción de forma **natural**: el contador tomaba la duración del siguiente tema pero se quedaba al final (por ejemplo, pasaba de `4:06 / 4:06` a `2:49 / 2:49`). Ahora se usa también la posición de la barra oficial de YouTube Music y se reinicia a `0:00`.

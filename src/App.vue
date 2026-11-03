@@ -51,7 +51,7 @@ const lyricsKey = ref("");
 const lyricsSongKey = ref("");
 const lyricsCache = new Map<string, Lyrics>();
 const LYRICS_CACHE_KEY = "ytmusic-app:lyrics-cache:v2";
-const LYRICS_CACHE_LIMIT = 200;
+const LYRICS_CACHE_LIMIT = 400;
 const LYRICS_CACHE_MAX_BYTES = 3_000_000;
 let lyricsRequest = 0;
 let lyricsTimer: number | undefined;

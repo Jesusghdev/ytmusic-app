@@ -2,13 +2,14 @@ mod lyrics;
 mod player;
 mod remote;
 
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU16, Ordering};
 use tauri::{AppHandle, Emitter, Listener, Manager, State, WindowEvent};
 
 pub struct Shared {
     player: Mutex<player::PlayerState>,
     port: AtomicU16,
+    remote_token: Mutex<String>,
 }
 
 impl Shared {
@@ -16,6 +17,7 @@ impl Shared {
         Self {
             player: Mutex::new(player::PlayerState::empty()),
             port: AtomicU16::new(0),
+            remote_token: Mutex::new(String::new()),
         }
     }
 }
@@ -49,24 +51,12 @@ fn get_player_state(shared: State<'_, Shared>) -> player::PlayerState {
 }
 
 #[tauri::command]
-async fn init_ytm(
-    app: AppHandle,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
+async fn init_ytm(app: AppHandle, x: f64, y: f64, width: f64, height: f64) -> Result<(), String> {
     player::create_embedded(&app, x, y, width, height)
 }
 
 #[tauri::command]
-fn set_ytm_bounds(
-    app: AppHandle,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-) -> Result<(), String> {
+fn set_ytm_bounds(app: AppHandle, x: f64, y: f64, width: f64, height: f64) -> Result<(), String> {
     player::set_embedded_bounds(&app, x, y, width, height)
 }
 
@@ -100,13 +90,19 @@ fn remote_info(app: AppHandle) -> Result<serde_json::Value, String> {
     let port = app.state::<Shared>().port.load(Ordering::SeqCst);
     if port == 0 {
         return Err(
-            "No se pudo iniciar el servidor de control remoto. Reinicia la aplicación."
-                .to_string(),
+            "No se pudo iniciar el servidor de control remoto. Reinicia la aplicación.".to_string(),
         );
     }
 
     Ok(serde_json::json!({
-        "url": remote::remote_url(port),
+        "url": remote::remote_url_with_token(
+            port,
+            &app
+                .state::<Shared>()
+                .remote_token
+                .lock()
+                .map_err(|_| "No se pudo leer el token del control remoto")?,
+        ),
         "port": port,
     }))
 }
