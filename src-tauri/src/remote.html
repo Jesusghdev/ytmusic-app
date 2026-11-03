@@ -386,6 +386,8 @@
         var toggleIcon = document.getElementById("toggleIcon");
 
         var state = null;
+        var remoteToken = new URLSearchParams(location.search).get("token") || "";
+        var authHeaders = remoteToken ? { "X-Remote-Token": remoteToken } : {};
         var basePosition = 0;
         var baseTime = 0;
         var draggingSeek = false;
@@ -478,7 +480,10 @@
 
         async function poll() {
           try {
-            var response = await fetch("/api/state", { cache: "no-store" });
+            var response = await fetch("/api/state", {
+              cache: "no-store",
+              headers: authHeaders,
+            });
             if (!response.ok) throw new Error("bad status");
             var data = await response.json();
             var previousId = state && state.video_id;
@@ -505,7 +510,10 @@
           try {
             await fetch("/api/command", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: Object.assign(
+                { "Content-Type": "application/json" },
+                authHeaders,
+              ),
               body: JSON.stringify(payload),
             });
           } catch (error) {

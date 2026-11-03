@@ -88,7 +88,10 @@ La aplicación integra la web oficial de YouTube Music en WebView2 y se comunica
 
 - No contiene contraseñas, cookies ni claves de API en el repositorio.
 - El inicio de sesión con Google se realiza en la web oficial dentro de WebView2; la sesión se guarda localmente en el equipo.
-- El control remoto es un servidor local HTTP sin autenticación: úsalo solo en redes de confianza.
+- El control remoto usa un token aleatorio persistente incluido únicamente en
+  el enlace del código QR; úsalo solo en redes de confianza. Si compartes el
+  enlace, cualquier persona que lo tenga podrá consultar el estado y controlar
+  la reproducción mientras la aplicación esté abierta.
 - Las búsquedas de letras envían título, artista, álbum y duración a LRCLIB y Lyrics.ovh; no se envía información de la cuenta.
 - La aplicación no crea un historial de reproducción propio.
 
