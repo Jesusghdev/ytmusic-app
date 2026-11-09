@@ -23,15 +23,9 @@ const emit = defineEmits<{
 
 const viewport = ref<HTMLElement | null>(null);
 const offset = ref(0);
-const activeStyle = computed(() => {
-  // En "full" la línea activa se ilumina completa; en "progressive" se
-  // rellena de izquierda a derecha según el progreso dentro de la línea.
-  const p =
-    props.highlightMode === "full"
-      ? 1
-      : Math.max(0, Math.min(1, props.progress));
-  return { "--p": `${p * 100}%` } as Record<string, string>;
-});
+const activeStyle = computed(() => ({
+  "--p": `${Math.max(0, Math.min(1, props.progress)) * 100}%`,
+}) as Record<string, string>);
 
 let resizeObserver: ResizeObserver | null = null;
 let manualScrollUntil = 0;
@@ -141,7 +135,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="lyrics-shell">
+  <div
+    class="lyrics-shell"
+    :class="{ 'full-highlight': highlightMode === 'full' }"
+  >
     <div v-if="loading" class="state">
       <p>Buscando letra…</p>
       <span>Sincronizando con la canción</span>
@@ -435,5 +432,15 @@ onBeforeUnmount(() => {
 .line span {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/*
+ * Modo "línea completa": se ilumina con el color (que sí tiene transición
+ * suave) en lugar del degradado de relleno, que no es transicionable y
+ * provocaba un salto brusco al cambiar de línea.
+ */
+.lyrics-shell.full-highlight .line.active span {
+  background-image: none;
+  -webkit-text-fill-color: currentColor;
 }
 </style>
