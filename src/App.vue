@@ -44,6 +44,7 @@ const siteSlot = ref<HTMLElement | null>(null);
 const siteInited = ref(false);
 const siteError = ref("");
 const SETTINGS_KEY = "ytmusic-app:settings:v1";
+const VOLUME_KEY = "ytmusic-app:volume:v1";
 
 type LyricsHighlightMode = "progressive" | "full";
 
@@ -124,6 +125,10 @@ let boundsFrame: number | undefined;
 let siteObserver: ResizeObserver | null = null;
 let bigScreenPoll: number | undefined;
 const lyricsPrefetches = new Set<string>();
+let volumeRestoreTimer: number | undefined;
+let volumeRestoreAttempts = 0;
+let volumeRestored = false;
+let volumeReady = false;
 
 function restoreLyricsCache() {
   try {
@@ -162,6 +167,56 @@ function persistLyricsCache() {
   } catch (error) {
     console.warn("No se pudo guardar la caché local de letras.", error);
   }
+}
+
+function readStoredVolume(): number | null {
+  try {
+    const raw = localStorage.getItem(VOLUME_KEY);
+    if (raw === null) return null;
+    const value = Number(raw);
+    if (Number.isFinite(value) && value >= 0 && value <= 1) return value;
+  } catch {
+    /* valor no disponible o ilegible */
+  }
+  return null;
+}
+
+function persistVolume(volume: number) {
+  try {
+    localStorage.setItem(VOLUME_KEY, String(volume));
+  } catch (error) {
+    console.warn("No se pudo guardar el volumen.", error);
+  }
+}
+
+function restoreVolume() {
+  const stored = readStoredVolume();
+  if (stored === null) {
+    // Sin preferencia guardada: dejamos el volumen que trae YouTube Music y
+    // empezamos a recordarlo a partir de ahora.
+    volumeReady = true;
+    return;
+  }
+
+  window.clearInterval(volumeRestoreTimer);
+  volumeRestoreTimer = window.setInterval(() => {
+    // El elemento <video> de YouTube Music puede no existir todavía; repetimos
+    // hasta que el volumen reportado coincida con el guardado.
+    if (Math.abs(player.value.volume - stored) < 0.01) {
+      window.clearInterval(volumeRestoreTimer);
+      volumeRestoreTimer = undefined;
+      volumeReady = true;
+      return;
+    }
+
+    void send("volume", stored);
+
+    if (++volumeRestoreAttempts >= 8) {
+      window.clearInterval(volumeRestoreTimer);
+      volumeRestoreTimer = undefined;
+      volumeReady = true;
+    }
+  }, 800);
 }
 
 function trackKeyOf(track: UpcomingTrack): string {
@@ -1057,6 +1112,21 @@ watch(
   { immediate: true },
 );
 
+watch(connected, (isConnected) => {
+  if (isConnected && !volumeRestored) {
+    volumeRestored = true;
+    restoreVolume();
+  }
+});
+
+watch(
+  () => player.value.volume,
+  (volume) => {
+    if (!volumeReady || !Number.isFinite(volume)) return;
+    persistVolume(volume);
+  },
+);
+
 onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
   window.addEventListener("resize", scheduleBounds);
@@ -1112,6 +1182,9 @@ onBeforeUnmount(() => {
   clearLyricsRetry();
   window.clearTimeout(errorTimer);
   stopBigScreenPoll();
+  if (volumeRestoreTimer !== undefined) {
+    window.clearInterval(volumeRestoreTimer);
+  }
   unlisten?.();
   unlistenResize?.();
   unlistenScale?.();
