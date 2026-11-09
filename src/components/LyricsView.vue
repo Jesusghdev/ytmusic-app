@@ -14,6 +14,7 @@ const props = defineProps<{
   windowed?: boolean;
   windowedLines?: number;
   hideScrollbar?: boolean;
+  highlightMode?: "progressive" | "full";
 }>();
 
 const emit = defineEmits<{
@@ -22,9 +23,15 @@ const emit = defineEmits<{
 
 const viewport = ref<HTMLElement | null>(null);
 const offset = ref(0);
-const activeStyle = computed(() => ({
-  "--p": `${Math.max(0, Math.min(1, props.progress)) * 100}%`,
-}) as Record<string, string>);
+const activeStyle = computed(() => {
+  // En "full" la línea activa se ilumina completa; en "progressive" se
+  // rellena de izquierda a derecha según el progreso dentro de la línea.
+  const p =
+    props.highlightMode === "full"
+      ? 1
+      : Math.max(0, Math.min(1, props.progress));
+  return { "--p": `${p * 100}%` } as Record<string, string>;
+});
 
 let resizeObserver: ResizeObserver | null = null;
 let manualScrollUntil = 0;

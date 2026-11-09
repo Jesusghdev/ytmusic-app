@@ -43,7 +43,47 @@ const seekDrag = ref<number | null>(null);
 const siteSlot = ref<HTMLElement | null>(null);
 const siteInited = ref(false);
 const siteError = ref("");
-const panelOpen = ref(false);
+const SETTINGS_KEY = "ytmusic-app:settings:v1";
+
+type LyricsHighlightMode = "progressive" | "full";
+
+interface AppSettings {
+  alwaysShowLyrics: boolean;
+  lyricsHighlight: LyricsHighlightMode;
+}
+
+const DEFAULT_SETTINGS: AppSettings = {
+  alwaysShowLyrics: true,
+  lyricsHighlight: "progressive",
+};
+
+function readStoredSettings(): AppSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<AppSettings>;
+      return {
+        alwaysShowLyrics:
+          typeof parsed.alwaysShowLyrics === "boolean"
+            ? parsed.alwaysShowLyrics
+            : DEFAULT_SETTINGS.alwaysShowLyrics,
+        lyricsHighlight:
+          parsed.lyricsHighlight === "full"
+            ? "full"
+            : DEFAULT_SETTINGS.lyricsHighlight,
+      };
+    }
+  } catch {
+    /* configuración ilegible: se usa el valor por defecto */
+  }
+  return { ...DEFAULT_SETTINGS };
+}
+
+const settingsOpen = ref(false);
+const storedSettings = readStoredSettings();
+const alwaysShowLyrics = ref(storedSettings.alwaysShowLyrics);
+const lyricsHighlight = ref<LyricsHighlightMode>(storedSettings.lyricsHighlight);
+const panelOpen = ref(alwaysShowLyrics.value);
 const panelTab = ref<"lyrics" | "remote">("lyrics");
 
 const lyrics = ref<Lyrics | null>(null);
@@ -583,7 +623,7 @@ function toggleBigScreen() {
 }
 
 function sendBounds() {
-  if (!siteInited.value || bigScreen.value) return;
+  if (!siteInited.value || bigScreen.value || settingsOpen.value) return;
   const slot = siteSlot.value;
   if (!slot) return;
 
@@ -619,7 +659,7 @@ async function initSite() {
     await invoke("init_ytm", { x, y, width, height });
     siteInited.value = true;
 
-    if (bigScreen.value) {
+    if (bigScreen.value || settingsOpen.value) {
       await invoke("set_ytm_visible", { visible: false });
     }
 
@@ -653,6 +693,58 @@ function switchTab(tab: "lyrics" | "remote") {
 function closePanel() {
   panelOpen.value = false;
   void nextTick(scheduleBounds);
+}
+
+function saveSettings() {
+  try {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        alwaysShowLyrics: alwaysShowLyrics.value,
+        lyricsHighlight: lyricsHighlight.value,
+      }),
+    );
+  } catch (error) {
+    console.warn("No se pudo guardar la configuración.", error);
+  }
+}
+
+function setLyricsHighlight(mode: LyricsHighlightMode) {
+  lyricsHighlight.value = mode;
+  saveSettings();
+}
+
+function openSettings() {
+  if (bigScreen.value) return;
+  settingsOpen.value = true;
+
+  // El reproductor de YouTube Music es un webview nativo que se dibuja por
+  // encima del contenido de la ventana. Para que el modal sea visible hay que
+  // moverlo fuera de pantalla, igual que en el modo pantalla completa.
+  void invoke("set_ytm_visible", { visible: false }).catch(() => {
+    /* el reproductor integrado puede no existir todavía */
+  });
+}
+
+function closeSettings() {
+  settingsOpen.value = false;
+  void invoke("set_ytm_visible", { visible: true }).catch(() => {
+    /* ignorar */
+  });
+  void nextTick(scheduleBounds);
+}
+
+function toggleAlwaysShowLyrics() {
+  alwaysShowLyrics.value = !alwaysShowLyrics.value;
+  saveSettings();
+
+  if (alwaysShowLyrics.value) {
+    panelTab.value = "lyrics";
+    panelOpen.value = true;
+    void nextTick(scheduleBounds);
+  } else if (panelTab.value === "lyrics") {
+    closePanel();
+  }
 }
 
 async function loadRemote() {
@@ -725,6 +817,14 @@ function onKeydown(event: KeyboardEvent) {
   }
 
   if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+  if (settingsOpen.value) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeSettings();
+    }
+    return;
+  }
 
   if (bigScreen.value) {
     switch (event.key) {
@@ -1067,7 +1167,7 @@ onBeforeUnmount(() => {
           class="title-action"
           :class="{ active: bigScreen }"
           type="button"
-          title="Pantalla grande: letra y carátula (F)"
+          title="Pantalla completa: letra y carátula (F)"
           @click="toggleBigScreen"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1075,7 +1175,22 @@ onBeforeUnmount(() => {
               d="M4 4h6v2H6v4H4zm10 0h6v6h-2V6h-4zM4 14h2v4h4v2H4zm14 0h2v6h-6v-2h4z"
             />
           </svg>
-          <span>Pantalla grande</span>
+          <span>Pantalla completa</span>
+        </button>
+
+        <button
+          class="title-action"
+          :class="{ active: settingsOpen }"
+          type="button"
+          title="Configuración"
+          @click="openSettings"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.48.41l-.36 2.54c-.59.24-1.13.55-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87a.48.48 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.31.59.22l2.39-.96c.49.39 1.03.7 1.62.94l.36 2.54c.04.24.24.41.48.41h3.84c.24 0 .44-.17.48-.41l.36-2.54a7.03 7.03 0 0 0 1.62-.94l2.39.96c.22.09.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"
+            />
+          </svg>
+          <span>Configuración</span>
         </button>
       </div>
 
@@ -1182,8 +1297,8 @@ onBeforeUnmount(() => {
           <button
             class="panel-icon"
             type="button"
-            title="Pantalla grande"
-            aria-label="Pantalla grande"
+            title="Pantalla completa"
+            aria-label="Pantalla completa"
             @click="toggleBigScreen"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1246,6 +1361,7 @@ onBeforeUnmount(() => {
             :message="lyrics?.message ?? ''"
             :windowed="lyrics?.synced ?? false"
             :windowed-lines="4"
+            :highlight-mode="lyricsHighlight"
             @seek="seekTo"
           />
 
@@ -1327,6 +1443,7 @@ onBeforeUnmount(() => {
             :message="lyrics?.message ?? ''"
             :windowed="true"
             :hide-scrollbar="true"
+            :highlight-mode="lyricsHighlight"
             @seek="seekTo"
           />
         </section>
@@ -1430,6 +1547,97 @@ onBeforeUnmount(() => {
       </div>
 
       <p v-if="commandError" class="big-error">{{ commandError }}</p>
+    </div>
+
+    <div
+      v-if="settingsOpen"
+      class="settings-overlay"
+      @click.self="closeSettings"
+    >
+      <div
+        class="settings-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Configuración"
+      >
+        <div class="settings-head">
+          <h2>Configuración</h2>
+          <button
+            class="panel-icon"
+            type="button"
+            title="Cerrar"
+            aria-label="Cerrar configuración"
+            @click="closeSettings"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M6.4 5.2 12 10.8l5.6-5.6 1.2 1.2L13.2 12l5.6 5.6-1.2 1.2L12 13.2l-5.6 5.6-1.2-1.2L10.8 12 5.2 6.4z"
+              />
+            </svg>
+          </button>
+        </div>
+
+        <div class="settings-body">
+          <div class="setting-row">
+            <div class="setting-text">
+              <strong>Mostrar siempre la letra</strong>
+              <span>
+                Mantiene desplegado el panel lateral con la letra sincronizada
+                al abrir la aplicación.
+              </span>
+            </div>
+
+            <button
+              class="switch"
+              :class="{ on: alwaysShowLyrics }"
+              type="button"
+              role="switch"
+              :aria-checked="alwaysShowLyrics"
+              aria-label="Mostrar siempre la letra"
+              @click="toggleAlwaysShowLyrics"
+            >
+              <span class="switch-thumb"></span>
+            </button>
+          </div>
+
+          <div class="setting-row setting-row--stack">
+            <div class="setting-text">
+              <strong>Resaltado de la letra</strong>
+              <span>
+                Elige cómo se ilumina la línea actual mientras avanza la
+                canción.
+              </span>
+            </div>
+
+            <div
+              class="segmented"
+              role="radiogroup"
+              aria-label="Resaltado de la letra"
+            >
+              <button
+                class="segment"
+                :class="{ on: lyricsHighlight === 'progressive' }"
+                type="button"
+                role="radio"
+                :aria-checked="lyricsHighlight === 'progressive'"
+                @click="setLyricsHighlight('progressive')"
+              >
+                Progresivo
+              </button>
+              <button
+                class="segment"
+                :class="{ on: lyricsHighlight === 'full' }"
+                type="button"
+                role="radio"
+                :aria-checked="lyricsHighlight === 'full'"
+                @click="setLyricsHighlight('full')"
+              >
+                Línea completa
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -2079,6 +2287,150 @@ button {
   border-color: transparent;
   background: linear-gradient(135deg, var(--red), var(--red-strong));
   box-shadow: 0 12px 28px rgba(255, 0, 51, 0.28);
+}
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 4, 6, 0.55);
+  backdrop-filter: blur(8px);
+}
+
+.settings-modal {
+  width: min(440px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #141419, #0c0c10);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.settings-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.settings-body {
+  padding: 8px 16px 16px;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+}
+
+.setting-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.setting-text strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.setting-text span {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.switch {
+  flex: none;
+  position: relative;
+  width: 42px;
+  height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.switch .switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.18s ease;
+}
+
+.switch.on {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--red), var(--red-strong));
+}
+
+.switch.on .switch-thumb {
+  transform: translateX(18px);
+}
+
+.setting-row--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.setting-row + .setting-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.segment {
+  height: 32px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.segment:hover {
+  color: #fff;
+}
+
+.segment.on {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 .big-screen {
