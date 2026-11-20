@@ -310,12 +310,13 @@ const backdropStyle = computed<Record<string, string>>(
 
 const trackKey = computed(() => {
   if (!player.value.title) return "";
-  // La duración y el ID no forman parte de la identidad: durante el cambio
-  // automático ambos pueden pertenecer temporalmente a la pista anterior.
+  // La duración puede pertenecer temporalmente a la pista anterior, pero el
+  // ID distingue versiones distintas con los mismos metadatos.
   return [
     player.value.title,
     player.value.artist,
     player.value.album,
+    player.value.video_id,
   ].join("|");
 });
 
@@ -324,9 +325,7 @@ function songKeyOf(state: PlayerState): string {
   const artist = state.artist.trim().toLowerCase();
   const album = state.album.trim().toLowerCase();
   if (!title && !state.video_id) return "";
-  // El ID de YouTube Music puede cambiar antes o después que los metadatos.
-  // Usarlo aquí hace que una sola transición se procese como varias.
-  return `${title}|${artist}|${album}`;
+  return `${title}|${artist}|${album}|${state.video_id}`;
 }
 
 function currentSongKey(): string {
@@ -431,26 +430,15 @@ function applyPlayer(next: PlayerState) {
   const songChanged =
     !!previousSong && !!nextSong && previousSong !== nextSong;
 
-  const shown = position.value;
-  const previousDuration = stableDuration.value || previous.duration;
-  const durationJump =
-    next.duration > 0 &&
-    previousDuration > 0 &&
-    Math.abs(next.duration - previousDuration) > 1.5;
-  const previousNearEnd =
-    previousDuration > 0 && shown >= previousDuration - 10;
   const realStart = next.position <= 5;
 
-  // La canción anterior terminó y empieza otra. Solo ocurre de forma natural
-  // cuando llevábamos un rato al final del tema; ahí YouTube Music puede
-  // publicar la duración nueva con la posición vieja.
-  const transitionStarted =
-    previousDuration > 0 &&
-    previousNearEnd &&
-    (durationJump || songChanged);
+  // La identidad de la pista es la única señal válida para reiniciar el
+  // contador. Un cambio aislado de duración puede ser una lectura transitoria
+  // de la barra o del vídeo y no debe reiniciar una canción que sigue sonando.
+  const transitionStarted = songChanged;
 
   if (transitionStarted) {
-    settleUntil = Math.max(settleUntil, now + 4500);
+    settleUntil = Math.max(settleUntil, now + 3000);
 
     // La duración que llega en la transición es la del tema nuevo: la
     // mostramos ya para que el máximo de la barra no salte después.
@@ -464,7 +452,7 @@ function applyPlayer(next: PlayerState) {
   // Posición heredada del tema anterior (p. ej. 4:06 recortado a 2:49):
   // congelamos el reloj en cero hasta que llegue la posición real del nuevo.
   if (transitionStarted && !realStart) {
-    holdUntil = Math.max(holdUntil, now + 2200);
+    holdUntil = Math.max(holdUntil, now + 1800);
     holdDuration = next.duration;
     holdSong = nextSong;
 
@@ -515,6 +503,16 @@ function applyPlayer(next: PlayerState) {
   }
 
   player.value = { ...next, duration, position: next.position };
+
+  // Una transición confirmada siempre empieza una nueva línea temporal.
+  // No permitimos que el ancla anterior ni seekGuardUntil conserven el
+  // contador de la canción previa.
+  if (songChanged) {
+    anchorPosition.value = realStart ? Math.max(0, next.position) : 0;
+    anchorAt.value = now;
+    anchorPlaying.value = next.playing;
+    return;
+  }
 
   if (now < seekGuardUntil) return;
 
