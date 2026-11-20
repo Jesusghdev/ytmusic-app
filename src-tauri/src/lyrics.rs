@@ -67,7 +67,9 @@ pub async fn fetch(
     // Las fuentes se consultan a la vez. Antes se encadenaban: una canción
     // sin letra podía tardar más de 30 s entre consultas y reintentos.
     let normalized_title = normalize_query(title);
-    let normalized_artist = normalize_query(artist);
+    // LRCLIB no siempre interpreta "A y B", "A & B" o "A, B" como
+    // colaboradores. Para la búsqueda libre conviene enviar solo los nombres.
+    let normalized_artist = artist_query(artist);
     let (exact, exact_without_duration, candidates, plain) = tokio::join!(
         lrclib_get(&http, title, artist, album, duration),
         lrclib_get(&http, title, artist, "", 0.0),
@@ -287,6 +289,10 @@ fn artist_tokens(value: &str) -> Vec<String> {
         .filter(|token| *token != "y" && *token != "and")
         .map(str::to_ascii_lowercase)
         .collect()
+}
+
+fn artist_query(value: &str) -> String {
+    artist_tokens(value).join(" ")
 }
 
 fn artist_overlap(left: &str, right: &str) -> usize {
@@ -590,6 +596,14 @@ mod tests {
             "Nsqk y Julieta Venegas",
             249.0
         ));
+    }
+
+    #[test]
+    fn builds_search_query_without_artist_connectors() {
+        assert_eq!(
+            artist_query("Nsqk y Julieta Venegas & mosca"),
+            "nsqk julieta venegas mosca"
+        );
     }
 
     #[test]
