@@ -23,6 +23,12 @@ export interface UpcomingTrack {
 export interface LyricLine {
   time: number;
   text: string;
+  words?: LyricWord[];
+}
+
+export interface LyricWord {
+  time: number;
+  text: string;
 }
 
 export interface Lyrics {

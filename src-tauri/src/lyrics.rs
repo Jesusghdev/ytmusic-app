@@ -7,6 +7,13 @@ const LRCLIB_APP_ID: &str = "sO-N_zayeBAXUHP5OVWGZwpGsMHO0rJz7mwoO6z6xYw";
 pub struct LyricLine {
     pub time: f64,
     pub text: String,
+    pub words: Vec<LyricWord>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct LyricWord {
+    pub time: f64,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, Serialize, Default)]
@@ -30,6 +37,26 @@ struct LrcLibTrack {
     plain_lyrics: Option<String>,
     #[serde(rename = "syncedLyrics")]
     synced_lyrics: Option<String>,
+    #[serde(rename = "lyricsfile")]
+    lyrics_file: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LyricsFile {
+    lines: Option<Vec<LyricsFileLine>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LyricsFileLine {
+    text: Option<String>,
+    start_ms: Option<f64>,
+    words: Option<Vec<LyricsFileWord>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LyricsFileWord {
+    text: Option<String>,
+    start_ms: Option<f64>,
 }
 
 fn client() -> Result<reqwest::Client, String> {
@@ -247,7 +274,11 @@ async fn fetch_plain_fallback(
         .lines()
         .map(|line| line.trim().to_string())
         .filter(|line| !line.is_empty())
-        .map(|text| LyricLine { time: -1.0, text })
+        .map(|text| LyricLine {
+            time: -1.0,
+            text,
+            words: Vec::new(),
+        })
         .collect::<Vec<_>>();
 
     if lines.is_empty() {
@@ -434,6 +465,21 @@ fn to_result(track: LrcLibTrack) -> Lyrics {
     let synced_raw = track.synced_lyrics.unwrap_or_default();
     let plain_raw = track.plain_lyrics.unwrap_or_default();
 
+    let word_synced_lines = track
+        .lyrics_file
+        .as_deref()
+        .map(parse_lyrics_file)
+        .unwrap_or_default();
+    if !word_synced_lines.is_empty() {
+        return Lyrics {
+            lines: word_synced_lines,
+            synced: true,
+            instrumental,
+            source: "LRCLIB".to_string(),
+            message: String::new(),
+        };
+    }
+
     let synced_lines = parse_lrc(&synced_raw);
     if !synced_lines.is_empty() {
         return Lyrics {
@@ -455,7 +501,11 @@ fn to_result(track: LrcLibTrack) -> Lyrics {
         .lines()
         .map(|line| line.trim().to_string())
         .filter(|line| !line.is_empty())
-        .map(|text| LyricLine { time: -1.0, text })
+        .map(|text| LyricLine {
+            time: -1.0,
+            text,
+            words: Vec::new(),
+        })
         .collect::<Vec<_>>();
 
     Lyrics {
@@ -469,6 +519,46 @@ fn to_result(track: LrcLibTrack) -> Lyrics {
         },
         message: String::new(),
     }
+}
+
+fn parse_lyrics_file(input: &str) -> Vec<LyricLine> {
+    let Ok(file) = serde_yaml::from_str::<LyricsFile>(input) else {
+        return Vec::new();
+    };
+
+    let mut lines = file
+        .lines
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|line| {
+            let time = line.start_ms? / 1000.0;
+            let text = line.text.unwrap_or_default();
+            let words = line
+                .words
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|word| {
+                    Some(LyricWord {
+                        time: word.start_ms? / 1000.0,
+                        text: word.text.unwrap_or_default(),
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            if words.is_empty() {
+                None
+            } else {
+                Some(LyricLine { time, text, words })
+            }
+        })
+        .collect::<Vec<_>>();
+
+    lines.sort_by(|left, right| {
+        left.time
+            .partial_cmp(&right.time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    lines
 }
 
 fn parse_lrc(input: &str) -> Vec<LyricLine> {
@@ -522,6 +612,7 @@ fn parse_lrc(input: &str) -> Vec<LyricLine> {
             lines.push(LyricLine {
                 time,
                 text: text.clone(),
+                words: Vec::new(),
             });
         }
     }
@@ -588,6 +679,7 @@ mod tests {
             instrumental: Some(false),
             plain_lyrics: None,
             synced_lyrics: Some("[00:01.00]Hola".to_string()),
+            lyrics_file: None,
         };
 
         assert!(matches_request(
@@ -607,6 +699,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_word_synced_lyrics_file() {
+        let lines = parse_lyrics_file(
+            "lines:\n- text: Hola mundo\n  start_ms: 1000\n  words:\n  - text: Hola \n    start_ms: 1000\n  - text: mundo\n    start_ms: 1500\n",
+        );
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Hola mundo");
+        assert_eq!(lines[0].words.len(), 2);
+        assert!((lines[0].words[1].time - 1.5).abs() < 0.001);
+    }
+
+    #[test]
     fn rejects_same_title_with_wrong_duration() {
         let track = LrcLibTrack {
             track_name: Some("Estar Así Siempre".to_string()),
@@ -615,6 +719,7 @@ mod tests {
             instrumental: Some(false),
             plain_lyrics: None,
             synced_lyrics: Some("[00:01.00]Otra versión".to_string()),
+            lyrics_file: None,
         };
 
         assert!(!matches_request(
@@ -634,6 +739,7 @@ mod tests {
             instrumental: Some(false),
             plain_lyrics: None,
             synced_lyrics: Some("[00:01.00]Colaboración diferente".to_string()),
+            lyrics_file: None,
         };
 
         assert!(!matches_request(

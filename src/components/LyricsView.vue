@@ -8,6 +8,7 @@ const props = defineProps<{
   instrumental: boolean;
   activeIndex: number;
   progress: number;
+  currentTime: number;
   loading: boolean;
   hasTrack: boolean;
   message: string;
@@ -103,6 +104,40 @@ function onLine(line: LyricLine) {
   emit("seek", line.time);
 }
 
+function hasWordSync(line: LyricLine): boolean {
+  return (line.words?.length ?? 0) > 0;
+}
+
+function isWordPast(line: LyricLine, index: number): boolean {
+  const word = line.words?.[index];
+  return word ? props.currentTime >= word.time : false;
+}
+
+function isWordCurrent(line: LyricLine, index: number): boolean {
+  const words = line.words ?? [];
+  const word = words[index];
+  const next = words[index + 1];
+  return Boolean(
+    word &&
+      props.currentTime >= word.time &&
+      (!next || props.currentTime < next.time),
+  );
+}
+
+function wordStyle(line: LyricLine, index: number): Record<string, string> | undefined {
+  const words = line.words ?? [];
+  const word = words[index];
+  if (!word || props.currentTime < word.time) return undefined;
+
+  const next = words[index + 1];
+  const end = next?.time ?? word.time + 0.6;
+  const progress = end > word.time
+    ? Math.max(0, Math.min(1, (props.currentTime - word.time) / (end - word.time)))
+    : 1;
+
+  return { "--word-p": `${progress * 100}%` };
+}
+
 function isOutsideWindow(index: number): boolean {
   if (!props.windowed || !props.synced) return false;
 
@@ -187,12 +222,27 @@ onBeforeUnmount(() => {
             active: synced && index === activeIndex,
             past: synced && index < activeIndex,
             clickable: synced,
+            'word-synced': synced && hasWordSync(line),
             'out-of-window': isOutsideWindow(index),
           }"
           :style="synced && index === activeIndex ? activeStyle : undefined"
           @click="onLine(line)"
         >
-          <span>{{ line.text || "♪" }}</span>
+          <span class="line-text">
+            <template v-if="highlightMode === 'progressive' && hasWordSync(line)">
+              <span
+                v-for="(word, wordIndex) in line.words"
+                :key="`${wordIndex}-${word.time}`"
+                class="word"
+                :class="{
+                  past: isWordPast(line, wordIndex),
+                  current: isWordCurrent(line, wordIndex),
+                }"
+                :style="wordStyle(line, wordIndex)"
+              >{{ word.text }}</span>
+            </template>
+            <template v-else>{{ line.text || "♪" }}</template>
+          </span>
         </p>
       </div>
     </div>
@@ -416,7 +466,7 @@ onBeforeUnmount(() => {
     drop-shadow(0 3px 12px rgba(0, 0, 0, 0.28));
 }
 
-.line.active span {
+.line.active:not(.word-synced) > .line-text {
   background-image: linear-gradient(
     90deg,
     #ffffff 0%,
@@ -429,7 +479,33 @@ onBeforeUnmount(() => {
   -webkit-text-fill-color: transparent;
 }
 
-.line span {
+.line.word-synced .word {
+  color: rgba(255, 255, 255, 0.46);
+  transition: color 0.12s ease;
+}
+
+.line.word-synced .word.past {
+  color: #fff;
+}
+
+.line.word-synced .word:not(.past) {
+  white-space: pre-wrap;
+}
+
+.line.active.word-synced .word.current {
+  background-image: linear-gradient(
+    90deg,
+    #ffffff 0%,
+    #ffffff var(--word-p, 100%),
+    rgba(255, 255, 255, 0.46) var(--word-p, 100%),
+    rgba(255, 255, 255, 0.46) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.line-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -439,7 +515,8 @@ onBeforeUnmount(() => {
  * suave) en lugar del degradado de relleno, que no es transicionable y
  * provocaba un salto brusco al cambiar de línea.
  */
-.lyrics-shell.full-highlight .line.active span {
+.lyrics-shell.full-highlight .line.active > .line-text,
+.lyrics-shell.full-highlight .line.active.word-synced .word {
   background-image: none;
   -webkit-text-fill-color: currentColor;
 }
