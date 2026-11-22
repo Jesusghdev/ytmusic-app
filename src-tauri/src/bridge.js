@@ -16,6 +16,9 @@
   var ipcUnavailable = false;
   var trackSignature = "";
   var trackChangedAt = 0;
+  var endedVideoId = "";
+  var boundVideo = null;
+  var boundVideoId = "";
   var pendingSeek = null;
   var pendingSeekUntil = 0;
   var pendingSeekStartedAt = 0;
@@ -220,6 +223,7 @@
   function readState() {
     var meta = readMeta();
     var el = video();
+    bindVideoEnded(el);
     var playing = false;
     var videoDuration = el && isFinite(el.duration) ? el.duration : 0;
     var bar = readBarTime();
@@ -248,6 +252,10 @@
       }
     }
 
+    if (el && el.ended && duration > 0) {
+      position = duration;
+    }
+
     if (el) {
       playing = !el.paused && !el.ended;
     } else {
@@ -265,6 +273,12 @@
     }
 
     var currentVideoId = getVideoId();
+    if (el && el.ended) {
+      advanceAfterEnded(currentVideoId);
+    } else {
+      endedVideoId = "";
+    }
+
     return {
       title: meta.title,
       artist: meta.artist,
@@ -278,6 +292,43 @@
       liked: readLikeStatus(),
       next_track: readNextTrack(currentVideoId),
     };
+  }
+
+  function advanceAfterEnded(videoId) {
+    var identity = videoId || "__ended__";
+    if (endedVideoId === identity) return;
+    endedVideoId = identity;
+
+    var clicked = clickAny([
+      "ytmusic-player-bar #next-button",
+      "ytmusic-player-bar .next-button",
+      "#next-button",
+      ".next-button",
+      'ytmusic-player-bar [aria-label="Next song"]',
+      '[aria-label="Next song"]',
+    ]);
+    if (!clicked) pressKey("N", true);
+  }
+
+  function bindVideoEnded(el) {
+    if (el === boundVideo) return;
+
+    if (boundVideo) {
+      boundVideo.removeEventListener("ended", onVideoEnded);
+    }
+
+    boundVideo = el;
+    boundVideoId = el ? getVideoId() : "";
+    endedVideoId = "";
+
+    if (boundVideo) {
+      boundVideo.addEventListener("ended", onVideoEnded);
+    }
+  }
+
+  function onVideoEnded() {
+    advanceAfterEnded(boundVideoId);
+    window.setTimeout(sendState, 50);
   }
 
   function sendState() {

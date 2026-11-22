@@ -51,11 +51,13 @@ type LyricsHighlightMode = "progressive" | "full";
 interface AppSettings {
   alwaysShowLyrics: boolean;
   lyricsHighlight: LyricsHighlightMode;
+  maintainVolume: boolean;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
   alwaysShowLyrics: true,
   lyricsHighlight: "progressive",
+  maintainVolume: false,
 };
 
 function readStoredSettings(): AppSettings {
@@ -72,6 +74,10 @@ function readStoredSettings(): AppSettings {
           parsed.lyricsHighlight === "full"
             ? "full"
             : DEFAULT_SETTINGS.lyricsHighlight,
+        maintainVolume:
+          typeof parsed.maintainVolume === "boolean"
+            ? parsed.maintainVolume
+            : DEFAULT_SETTINGS.maintainVolume,
       };
     }
   } catch {
@@ -84,6 +90,7 @@ const settingsOpen = ref(false);
 const storedSettings = readStoredSettings();
 const alwaysShowLyrics = ref(storedSettings.alwaysShowLyrics);
 const lyricsHighlight = ref<LyricsHighlightMode>(storedSettings.lyricsHighlight);
+const maintainVolume = ref(storedSettings.maintainVolume);
 const panelOpen = ref(alwaysShowLyrics.value);
 const panelTab = ref<"lyrics" | "remote">("lyrics");
 
@@ -99,7 +106,7 @@ let lyricsRequest = 0;
 let lyricsTimer: number | undefined;
 let lyricsRetryTimer: number | undefined;
 let lyricsAttempt = 0;
-const MAX_LYRICS_ATTEMPTS = 1;
+const MAX_LYRICS_ATTEMPTS = 3;
 let errorTimer: number | undefined;
 
 const remote = ref<RemoteInfo | null>(null);
@@ -123,12 +130,14 @@ let unlistenScale: UnlistenFn | null = null;
 let clockTimer: number | undefined;
 let boundsFrame: number | undefined;
 let siteObserver: ResizeObserver | null = null;
-let bigScreenPoll: number | undefined;
 const lyricsPrefetches = new Set<string>();
 let volumeRestoreTimer: number | undefined;
 let volumeRestoreAttempts = 0;
 let volumeRestored = false;
 let volumeReady = false;
+let volumeRestoreFailed = false;
+let volumeRestoreBaseline = 0;
+let volumeRestoreTarget: number | null = null;
 
 function restoreLyricsCache() {
   try {
@@ -182,6 +191,7 @@ function readStoredVolume(): number | null {
 }
 
 function persistVolume(volume: number) {
+  if (!maintainVolume.value) return;
   try {
     localStorage.setItem(VOLUME_KEY, String(volume));
   } catch (error) {
@@ -189,7 +199,21 @@ function persistVolume(volume: number) {
   }
 }
 
+function finishVolumeRestore() {
+  window.clearInterval(volumeRestoreTimer);
+  volumeRestoreTimer = undefined;
+  volumeRestoreFailed = false;
+  volumeRestoreTarget = null;
+  volumeReady = true;
+}
+
 function restoreVolume() {
+  if (!maintainVolume.value) {
+    volumeReady = true;
+    volumeRestoreTarget = null;
+    return;
+  }
+
   const stored = readStoredVolume();
   if (stored === null) {
     // Sin preferencia guardada: dejamos el volumen que trae YouTube Music y
@@ -198,25 +222,35 @@ function restoreVolume() {
     return;
   }
 
+  volumeRestoreAttempts = 0;
+  volumeRestoreFailed = false;
+  volumeRestoreBaseline = player.value.volume;
+  volumeRestoreTarget = stored;
+  volumeReady = false;
   window.clearInterval(volumeRestoreTimer);
-  volumeRestoreTimer = window.setInterval(() => {
+  const attempt = () => {
     // El elemento <video> de YouTube Music puede no existir todavía; repetimos
     // hasta que el volumen reportado coincida con el guardado.
     if (Math.abs(player.value.volume - stored) < 0.01) {
+      finishVolumeRestore();
+      return;
+    }
+
+    if (++volumeRestoreAttempts > 20) {
       window.clearInterval(volumeRestoreTimer);
       volumeRestoreTimer = undefined;
-      volumeReady = true;
+      volumeRestoreFailed = true;
+      console.warn(
+        "No se pudo confirmar la restauración del volumen; se conservará la preferencia guardada.",
+      );
       return;
     }
 
     void send("volume", stored);
+  };
 
-    if (++volumeRestoreAttempts >= 8) {
-      window.clearInterval(volumeRestoreTimer);
-      volumeRestoreTimer = undefined;
-      volumeReady = true;
-    }
-  }, 800);
+  attempt();
+  volumeRestoreTimer = window.setInterval(attempt, 500);
 }
 
 function trackKeyOf(track: UpcomingTrack): string {
@@ -310,26 +344,31 @@ const backdropStyle = computed<Record<string, string>>(
 
 const trackKey = computed(() => {
   if (!player.value.title) return "";
-  // La duración puede pertenecer temporalmente a la pista anterior, pero el
-  // ID distingue versiones distintas con los mismos metadatos.
+  // El bridge puede publicar el video_id antes que los metadatos nuevos.
+  // La clave de letras debe esperar a la identidad visible de la canción.
   return [
     player.value.title,
     player.value.artist,
     player.value.album,
-    player.value.video_id,
   ].join("|");
 });
 
-function songKeyOf(state: PlayerState): string {
+function metadataKeyOf(state: PlayerState): string {
   const title = state.title.trim().toLowerCase();
   const artist = state.artist.trim().toLowerCase();
   const album = state.album.trim().toLowerCase();
   if (!title && !state.video_id) return "";
-  return `${title}|${artist}|${album}|${state.video_id}`;
+  return `${title}|${artist}|${album}`;
+}
+
+function playbackKeyOf(state: PlayerState): string {
+  const metadata = metadataKeyOf(state);
+  if (!metadata && !state.video_id) return "";
+  return `${metadata}|${state.video_id}`;
 }
 
 function currentSongKey(): string {
-  return songKeyOf(player.value);
+  return metadataKeyOf(player.value);
 }
 
 const activeIndex = computed(() => {
@@ -425,12 +464,21 @@ function refreshDuration(incoming: number): number {
 function applyPlayer(next: PlayerState) {
   const now = performance.now();
   const previous = player.value;
-  const previousSong = songKeyOf(previous);
-  const nextSong = songKeyOf(next);
-  const songChanged =
-    !!previousSong && !!nextSong && previousSong !== nextSong;
+  const previousMetadata = metadataKeyOf(previous);
+  const nextMetadata = metadataKeyOf(next);
+  const previousPlayback = playbackKeyOf(previous);
+  const nextPlayback = playbackKeyOf(next);
 
   const realStart = next.position <= 5;
+  const metadataChanged =
+    !!previousMetadata &&
+    !!nextMetadata &&
+    previousMetadata !== nextMetadata;
+  const videoChanged =
+    !!previous.video_id &&
+    !!next.video_id &&
+    previousPlayback !== nextPlayback;
+  const songChanged = metadataChanged || (videoChanged && realStart);
 
   // La identidad de la pista es la única señal válida para reiniciar el
   // contador. Un cambio aislado de duración puede ser una lectura transitoria
@@ -454,7 +502,7 @@ function applyPlayer(next: PlayerState) {
   if (transitionStarted && !realStart) {
     holdUntil = Math.max(holdUntil, now + 1800);
     holdDuration = next.duration;
-    holdSong = nextSong;
+    holdSong = nextPlayback;
 
     if (next.duration > 0) {
       stableDuration.value = next.duration;
@@ -465,7 +513,7 @@ function applyPlayer(next: PlayerState) {
 
   const duration = refreshDuration(next.duration);
 
-  if (now < holdUntil && nextSong === holdSong) {
+  if (now < holdUntil && nextPlayback === holdSong) {
     player.value = { ...next, duration, position: 0 };
 
     // El tema nuevo ya arrancó de verdad: aceptamos su posición y dejamos de
@@ -498,7 +546,7 @@ function applyPlayer(next: PlayerState) {
     return;
   }
 
-  if (now < holdUntil && nextSong !== holdSong) {
+  if (now < holdUntil && nextPlayback !== holdSong) {
     holdUntil = 0;
   }
 
@@ -530,6 +578,17 @@ function applyPlayer(next: PlayerState) {
   const incomingPosition =
     duration > 0 ? Math.min(next.position, duration) : next.position;
   const drift = incomingPosition - expected;
+
+  // Una lectura atrasada de la barra o un estado "paused" transitorio puede
+  // traer una posición anterior aunque la pista siga en la misma reproducción.
+  // El reloj solo puede retroceder por un seek explícito o por una pista nueva.
+  if (
+    incomingPosition < expected - 1.5 &&
+    now >= seekGuardUntil &&
+    (next.playing || anchorPlaying.value)
+  ) {
+    return;
+  }
 
   // Las lecturas del elemento de vídeo y de la barra oficial llegan
   // alternadas durante la reproducción. Reanclar el reloj en cada lectura
@@ -621,8 +680,6 @@ async function enterBigScreen() {
     /* el reproductor integrado puede no existir todavía */
   }
 
-  startBigScreenPoll();
-
   try {
     await getCurrentWindow().setFullscreen(true);
   } catch {
@@ -633,7 +690,6 @@ async function enterBigScreen() {
 async function exitBigScreen() {
   if (!bigScreen.value) return;
 
-  stopBigScreenPoll();
   bigScreen.value = false;
 
   try {
@@ -649,22 +705,6 @@ async function exitBigScreen() {
   }
 
   void nextTick(scheduleBounds);
-}
-
-function startBigScreenPoll() {
-  stopBigScreenPoll();
-  bigScreenPoll = window.setInterval(() => {
-    void invoke("ytm_nudge").catch(() => {
-      /* el reproductor puede no estar listo */
-    });
-  }, 400);
-}
-
-function stopBigScreenPoll() {
-  if (bigScreenPoll !== undefined) {
-    window.clearInterval(bigScreenPoll);
-    bigScreenPoll = undefined;
-  }
 }
 
 function toggleBigScreen() {
@@ -755,6 +795,7 @@ function saveSettings() {
       JSON.stringify({
         alwaysShowLyrics: alwaysShowLyrics.value,
         lyricsHighlight: lyricsHighlight.value,
+        maintainVolume: maintainVolume.value,
       }),
     );
   } catch (error) {
@@ -765,6 +806,27 @@ function saveSettings() {
 function setLyricsHighlight(mode: LyricsHighlightMode) {
   lyricsHighlight.value = mode;
   saveSettings();
+}
+
+function toggleMaintainVolume() {
+  maintainVolume.value = !maintainVolume.value;
+  saveSettings();
+
+  if (maintainVolume.value) {
+    volumeRestored = false;
+    if (connected.value) {
+      volumeRestored = true;
+      restoreVolume();
+    }
+    return;
+  }
+
+  window.clearInterval(volumeRestoreTimer);
+  volumeRestoreTimer = undefined;
+  volumeRestoreAttempts = 0;
+  volumeRestoreFailed = false;
+  volumeRestoreTarget = null;
+  volumeReady = true;
 }
 
 function openSettings() {
@@ -1087,7 +1149,7 @@ watch(trackKey, (key) => {
   lyricsLoading.value = true;
   lyricsTimer = window.setTimeout(() => {
     void loadLyrics(false);
-  }, 150);
+  }, 400);
 });
 
 watch(
@@ -1120,8 +1182,32 @@ watch(connected, (isConnected) => {
 watch(
   () => player.value.volume,
   (volume) => {
-    if (!volumeReady || !Number.isFinite(volume)) return;
-    persistVolume(volume);
+    if (!maintainVolume.value || !Number.isFinite(volume)) return;
+
+    if (
+      volumeRestoreTarget !== null &&
+      Math.abs(volume - volumeRestoreTarget) < 0.01
+    ) {
+      finishVolumeRestore();
+      return;
+    }
+
+    if (volumeReady) {
+      persistVolume(volume);
+      return;
+    }
+
+    // Si la restauración agotó sus intentos, solo desbloqueamos la
+    // persistencia cuando el usuario cambia realmente el volumen.
+    if (
+      volumeRestoreFailed &&
+      Math.abs(volume - volumeRestoreBaseline) >= 0.01
+    ) {
+      volumeRestoreFailed = false;
+      volumeRestoreTarget = null;
+      volumeReady = true;
+      persistVolume(volume);
+    }
   },
 );
 
@@ -1179,7 +1265,6 @@ onBeforeUnmount(() => {
   window.clearTimeout(lyricsTimer);
   clearLyricsRetry();
   window.clearTimeout(errorTimer);
-  stopBigScreenPoll();
   if (volumeRestoreTimer !== undefined) {
     window.clearInterval(volumeRestoreTimer);
   }
@@ -1668,6 +1753,28 @@ onBeforeUnmount(() => {
               :aria-checked="alwaysShowLyrics"
               aria-label="Mostrar siempre la letra"
               @click="toggleAlwaysShowLyrics"
+            >
+              <span class="switch-thumb"></span>
+            </button>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-text">
+              <strong>Mantener el volumen</strong>
+              <span>
+                Guarda y restaura el volumen al volver a abrir la aplicación.
+                Cuando está desactivado, YouTube Music funciona normalmente.
+              </span>
+            </div>
+
+            <button
+              class="switch"
+              :class="{ on: maintainVolume }"
+              type="button"
+              role="switch"
+              :aria-checked="maintainVolume"
+              aria-label="Mantener el volumen"
+              @click="toggleMaintainVolume"
             >
               <span class="switch-thumb"></span>
             </button>
