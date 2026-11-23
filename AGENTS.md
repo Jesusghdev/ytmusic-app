@@ -118,6 +118,10 @@ Estos son detalles que NO deben romperse al modificar código:
 12. **Pausa y seeks**: pausas y seeks manuales invalidan la extrapolación automática local. Busca pausas, seeks y cambios de pista antes de conservar o avanzar un ancla.
 13. **Avance automático anticipado**: solo ejecutar `next` desde el puente durante reproducción activa, 1-2 segundos antes del final, una vez por `video_id`, después de asentamiento del cambio de pista y con protección contra retrocesos. Nunca dispararlo mientras esté pausado.
 14. **Normalización de letras**: las coincidencias de LRCLIB deben ignorar acentos españoles (`más`/`mas`, `ásí`/`asi`) y signos de puntuación, pero conservar límites conservadores de artista y duración. Una búsqueda libre normalizada debe incluir variantes sin acento.
+15. **Validación del medio real**: al cambiar automáticamente, el `video_id` del reproductor real (`#movie_player.getVideoData().video_id`, ya que `<video>.currentSrc` usa `blob:` en YouTube Music) tiene prioridad sobre metadatos heredados de la barra. No aceptar duración o posición de una pista nueva hasta que el reproductor y la barra coincidan cuando ambos exponen ID.
+16. **Duración y letras**: la duración usada para buscar letras debe provenir de una duración estable por `video_id`, no de un contador extrapolado ni de la posición heredada. Las cargas de letras esperan el asentamiento de la transición antes de enviar duración a LRCLIB.
+17. **Transiciones automáticas**: no congelar el contador en `0:00` por ventanas largas de asentamiento. Al confirmar un `video_id` nuevo, reiniciar el ancla, pero permitir que `el.currentTime` y `playing` conduzcan el avance inmediato. Si el vídeo todavía coincide con la pista anterior, esperar confirmación cruzada entre `<video>` y la barra antes de aceptar identidad.
+18. **Estados cruzados**: mientras el `<video>` y la barra muestren IDs distintos, el puente debe enviar ID, posición y duración vacíos/identificados como no confirmados. Nunca etiquetar `el.currentTime` antiguo con el nuevo título o ID. Cada estado confirmado debe reanclar la posición para evitar un contador atrapado en cero.
 
 ## Comandos de desarrollo
 

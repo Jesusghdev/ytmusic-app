@@ -11,6 +11,7 @@ export interface PlayerState {
   liked: boolean;
   updated_at: number;
   next_track?: UpcomingTrack | null;
+  prefetch_tracks?: UpcomingTrack[];
 }
 
 export interface UpcomingTrack {

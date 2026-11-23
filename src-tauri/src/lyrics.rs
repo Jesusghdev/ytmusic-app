@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 const LRCLIB_APP_ID: &str = "sO-N_zayeBAXUHP5OVWGZwpGsMHO0rJz7mwoO6z6xYw";
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LyricLine {
@@ -59,20 +61,29 @@ struct LyricsFileWord {
     start_ms: Option<f64>,
 }
 
-fn client() -> Result<reqwest::Client, String> {
+fn client() -> Result<&'static reqwest::Client, String> {
+    if let Some(existing) = HTTP_CLIENT.get() {
+        return Ok(existing);
+    }
+
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         "Lrclib-App-Id",
         reqwest::header::HeaderValue::from_static(LRCLIB_APP_ID),
     );
 
-    reqwest::Client::builder()
+    let built = reqwest::Client::builder()
         .default_headers(headers)
-        .user_agent("YouTube-Music-Desktop/0.2.5 (https://github.com/Jesusghdev/ytmusic-app)")
+        .user_agent("YouTube-Music-Desktop/0.2.7 (https://github.com/Jesusghdev/ytmusic-app)")
         .timeout(Duration::from_secs(5))
         .connect_timeout(Duration::from_secs(3))
         .build()
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+
+    let _ = HTTP_CLIENT.set(built);
+    HTTP_CLIENT
+        .get()
+        .ok_or_else(|| "No se pudo inicializar el cliente HTTP.".to_string())
 }
 
 pub async fn fetch(
@@ -91,17 +102,22 @@ pub async fn fetch(
 
     let http = client()?;
 
-    // Las fuentes se consultan a la vez. Antes se encadenaban: una canción
-    // sin letra podía tardar más de 30 s entre consultas y reintentos.
+    // Primera ronda rápida: solo LRCLIB (exacto + búsqueda). No bloqueamos
+    // esperando a Lyrics.ovh cuando LRCLIB ya responde en ~200 ms.
     let normalized_title = normalize_query(title);
     // LRCLIB no siempre interpreta "A y B", "A & B" o "A, B" como
     // colaboradores. Para la búsqueda libre conviene enviar solo los nombres.
     let normalized_artist = artist_query(artist);
-    let (exact, exact_without_duration, candidates, plain) = tokio::join!(
-        lrclib_get(&http, title, artist, album, duration),
-        lrclib_get(&http, title, artist, "", 0.0),
-        lrclib_search(&http, title, artist),
-        fetch_plain_fallback(&http, title, artist),
+    let (exact, exact_without_duration, candidates) = tokio::join!(
+        lrclib_get(http, title, artist, album, duration),
+        async {
+            if duration <= 0.0 {
+                lrclib_get(http, title, artist, "", 0.0).await
+            } else {
+                None
+            }
+        },
+        lrclib_search(http, title, artist),
     );
 
     if let Some(track) = exact {
@@ -134,13 +150,13 @@ pub async fn fetch(
         }
     }
 
-    // Algunas canciones aparecen en LRCLIB solo con una consulta libre y sin
-    // puntuación. Se prueban variantes normalizadas únicamente como fallback
-    // para no golpear innecesariamente el límite de la API.
-    let (normalized_candidates, free, title_only) = tokio::join!(
-        lrclib_search_free(&http, &normalized_title, &normalized_artist),
-        lrclib_search_free(&http, title, artist),
-        lrclib_search_free(&http, &normalized_title, ""),
+    // Segunda ronda (fallback): consultas libres de LRCLIB + Lyrics.ovh en
+    // paralelo, solo cuando la primera ronda no encontró coincidencia.
+    let (normalized_candidates, free, title_only, plain) = tokio::join!(
+        lrclib_search_free(http, &normalized_title, &normalized_artist),
+        lrclib_search_free(http, title, artist),
+        lrclib_search_free(http, &normalized_title, ""),
+        fetch_plain_fallback(http, title, artist),
     );
     let mut fallback_candidates = normalized_candidates;
     fallback_candidates.extend(free);

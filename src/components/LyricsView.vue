@@ -32,6 +32,7 @@ let resizeObserver: ResizeObserver | null = null;
 let manualScrollUntil = 0;
 let manualScrollTimer: number | undefined;
 let programmaticScrollUntil = 0;
+let pendingInstantCenter = false;
 
 const MANUAL_SCROLL_PAUSE = 5000;
 
@@ -46,12 +47,13 @@ function onScroll() {
   }, MANUAL_SCROLL_PAUSE);
 }
 
-function centerActiveLine() {
+function centerActiveLine(instant = false) {
   if (!props.synced || props.lines.length === 0) {
     offset.value = 0;
     return;
   }
 
+  const useInstant = instant || pendingInstantCenter;
   const targetIndex = Math.max(props.activeIndex, 0);
   const container = viewport.value;
   const line = container?.querySelector<HTMLElement>(
@@ -59,17 +61,24 @@ function centerActiveLine() {
   );
 
   if (!container || !line) return;
-  if (props.windowed && performance.now() < manualScrollUntil) return;
+  if (props.windowed && !useInstant && performance.now() < manualScrollUntil) return;
 
+  pendingInstantCenter = false;
   const target =
     line.offsetTop + line.offsetHeight / 2 - container.clientHeight * 0.42;
   if (props.windowed) {
     const maximum = Math.max(0, container.scrollHeight - container.clientHeight);
-    programmaticScrollUntil = performance.now() + 700;
-    container.scrollTo({
-      top: Math.max(0, Math.min(target, maximum)),
-      behavior: "smooth",
-    });
+    const clamped = Math.max(0, Math.min(target, maximum));
+    if (useInstant) {
+      programmaticScrollUntil = performance.now() + 250;
+      container.scrollTop = clamped;
+    } else {
+      programmaticScrollUntil = performance.now() + 900;
+      container.scrollTo({
+        top: clamped,
+        behavior: "smooth",
+      });
+    }
     offset.value = 0;
     return;
   }
@@ -80,22 +89,25 @@ function centerActiveLine() {
 watch(
   () => props.activeIndex,
   () => {
-    void nextTick(centerActiveLine);
+    void nextTick(() => centerActiveLine(false));
   },
 );
 
 watch(
   () => props.lines,
   () => {
+    manualScrollUntil = 0;
+    window.clearTimeout(manualScrollTimer);
+    pendingInstantCenter = true;
     offset.value = 0;
-    void nextTick(centerActiveLine);
+    void nextTick(() => centerActiveLine(true));
   },
 );
 
 watch(
   () => props.synced,
   () => {
-    void nextTick(centerActiveLine);
+    void nextTick(() => centerActiveLine(true));
   },
 );
 
@@ -150,7 +162,7 @@ function isOutsideWindow(index: number): boolean {
 }
 
 onMounted(() => {
-  void nextTick(centerActiveLine);
+  void nextTick(() => centerActiveLine(true));
 });
 
 watch(viewport, (element) => {
@@ -158,9 +170,9 @@ watch(viewport, (element) => {
   resizeObserver = null;
 
   if (!element || typeof ResizeObserver === "undefined") return;
-  resizeObserver = new ResizeObserver(() => centerActiveLine());
+  resizeObserver = new ResizeObserver(() => centerActiveLine(true));
   resizeObserver.observe(element);
-  void nextTick(centerActiveLine);
+  void nextTick(() => centerActiveLine(true));
 });
 
 onBeforeUnmount(() => {

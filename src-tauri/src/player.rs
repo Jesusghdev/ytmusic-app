@@ -46,6 +46,8 @@ pub struct PlayerState {
     pub updated_at: u64,
     #[serde(default)]
     pub next_track: Option<UpcomingTrack>,
+    #[serde(default)]
+    pub prefetch_tracks: Vec<UpcomingTrack>,
 }
 
 impl PlayerState {
@@ -61,18 +63,17 @@ impl PlayerState {
         self.artist = clean_text(&self.artist, 300);
         self.album = clean_text(&self.album, 300);
         if let Some(next) = &mut self.next_track {
-            next.title = clean_text(&next.title, 300);
-            next.artist = clean_text(&next.artist, 300);
-            next.album = clean_text(&next.album, 300);
-            next.duration = if next.duration.is_finite() && next.duration > 0.0 {
-                next.duration.min(86_400.0)
-            } else {
-                0.0
-            };
+            sanitize_upcoming(next);
             if next.title.is_empty() {
                 self.next_track = None;
             }
         }
+
+        self.prefetch_tracks.truncate(3);
+        for track in &mut self.prefetch_tracks {
+            sanitize_upcoming(track);
+        }
+        self.prefetch_tracks.retain(|track| !track.title.is_empty());
 
         if !(self.artwork.starts_with("https://") || self.artwork.starts_with("http://")) {
             self.artwork.clear();
@@ -113,6 +114,17 @@ impl PlayerState {
     }
 }
 
+fn sanitize_upcoming(track: &mut UpcomingTrack) {
+    track.title = clean_text(&track.title, 300);
+    track.artist = clean_text(&track.artist, 300);
+    track.album = clean_text(&track.album, 300);
+    track.duration = if track.duration.is_finite() && track.duration > 0.0 {
+        track.duration.min(86_400.0)
+    } else {
+        0.0
+    };
+}
+
 fn clean_text(value: &str, max: usize) -> String {
     let text = value
         .chars()
@@ -142,8 +154,10 @@ pub fn effective(state: &PlayerState) -> PlayerState {
     result
 }
 
-fn bridge_script(port: u16) -> String {
-    BRIDGE_JS.replace("__PORT__", &port.to_string())
+fn bridge_script(port: u16, token: &str) -> String {
+    BRIDGE_JS
+        .replace("__PORT__", &port.to_string())
+        .replace("__TOKEN__", token)
 }
 
 /// Crea (o recoloca) YouTube Music incrustado dentro de la ventana principal.
@@ -160,10 +174,16 @@ pub fn create_embedded(
         return set_embedded_bounds(app, x, y, width, height);
     }
 
-    let port = app.state::<crate::Shared>().port.load(Ordering::SeqCst);
+    let shared = app.state::<crate::Shared>();
+    let port = shared.port.load(Ordering::SeqCst);
     if port == 0 {
         return Err("El servidor interno no está disponible.".to_string());
     }
+    let token = shared
+        .remote_token
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
 
     let window = app
         .get_window("main")
@@ -174,7 +194,7 @@ pub fn create_embedded(
         .map_err(|_| "No se pudo construir la URL de YouTube Music.".to_string())?;
 
     let builder = WebviewBuilder::new("ytm", WebviewUrl::External(url))
-        .initialization_script(bridge_script(port))
+        .initialization_script(bridge_script(port, &token))
         .background_color(Color(10, 10, 12, 255));
 
     window

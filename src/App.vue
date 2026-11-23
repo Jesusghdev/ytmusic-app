@@ -21,6 +21,7 @@ function emptyPlayer(): PlayerState {
     liked: false,
     updated_at: 0,
     next_track: null,
+    prefetch_tracks: [],
   };
 }
 
@@ -98,6 +99,7 @@ const lyrics = ref<Lyrics | null>(null);
 const lyricsLoading = ref(false);
 const lyricsKey = ref("");
 const lyricsSongKey = ref("");
+const lyricsVideoId = ref("");
 const lyricsCache = new Map<string, Lyrics>();
 const LYRICS_CACHE_KEY = "ytmusic-app:lyrics-cache:v2";
 const LYRICS_CACHE_LIMIT = 400;
@@ -116,22 +118,22 @@ const qrData = ref("");
 const copied = ref(false);
 
 let seekGuardUntil = 0;
-// Ventana de asentamiento tras un cambio automático de canción: durante este
-// tiempo se ignoran posiciones heredadas de la pista anterior.
-let holdUntil = 0;
-let holdDuration = 0;
-let holdSong = "";
-let settleUntil = 0;
 let pendingDuration = 0;
 let pendingDurationSamples = 0;
+let currentTrackId = "";
 let unlisten: UnlistenFn | null = null;
 let unlistenVolume: UnlistenFn | null = null;
 let unlistenResize: UnlistenFn | null = null;
 let unlistenScale: UnlistenFn | null = null;
 let clockTimer: number | undefined;
+let bigScreenNudgeTimer: number | undefined;
 let boundsFrame: number | undefined;
 let siteObserver: ResizeObserver | null = null;
 const lyricsPrefetches = new Set<string>();
+const lyricsPrefetchAttempted = new Set<string>();
+const prefetchQueue: UpcomingTrack[] = [];
+let prefetchRunning = false;
+let prefetchTimer: number | undefined;
 let volumeRestored = false;
 
 function restoreLyricsCache() {
@@ -209,44 +211,115 @@ function restoreVolume() {
   void send("restore_volume", stored);
 }
 
-function trackKeyOf(track: UpcomingTrack): string {
+function trackKeyOf(track: Pick<UpcomingTrack, "title" | "artist" | "album">): string {
   return [track.title, track.artist, track.album]
     .map((value) => value.trim().toLowerCase())
     .join("|");
 }
 
-function prefetchLyrics(track: UpcomingTrack) {
-  const song = trackKeyOf(track);
+function looseTrackKeyOf(track: Pick<UpcomingTrack, "title" | "artist">): string {
+  const title = track.title.trim().toLowerCase();
+  const artist = track.artist.trim().toLowerCase();
+  if (!title || !artist) return "";
+  return `${title}|${artist}`;
+}
+
+function findCachedLyrics(
+  track: Pick<UpcomingTrack, "title" | "artist" | "album">,
+): Lyrics | undefined {
+  const exact = trackKeyOf(track);
+  const direct = lyricsCache.get(exact);
+  if (direct) return direct;
+
+  const loose = looseTrackKeyOf(track);
+  if (loose) return lyricsCache.get(loose);
+  return undefined;
+}
+
+function storeCachedLyrics(
+  track: Pick<UpcomingTrack, "title" | "artist" | "album">,
+  result: Lyrics,
+) {
+  const exact = trackKeyOf(track);
+  if (exact) lyricsCache.set(exact, result);
+  const loose = looseTrackKeyOf(track);
+  if (loose) lyricsCache.set(loose, result);
+  persistLyricsCache();
+}
+
+function drainPrefetchQueue() {
+  if (prefetchRunning) return;
+  const next = prefetchQueue.shift();
+  if (!next) return;
+
+  const exact = trackKeyOf(next);
+  const loose = looseTrackKeyOf(next);
+  const dedupeKey = loose || exact;
+
   if (
-    !track.title.trim() ||
-    lyricsCache.has(song) ||
-    lyricsPrefetches.has(song)
+    !next.title.trim() ||
+    findCachedLyrics(next) ||
+    lyricsPrefetches.has(dedupeKey) ||
+    lyricsPrefetchAttempted.has(dedupeKey)
   ) {
+    drainPrefetchQueue();
     return;
   }
 
-  lyricsPrefetches.add(song);
+  prefetchRunning = true;
+  lyricsPrefetches.add(dedupeKey);
+  lyricsPrefetchAttempted.add(dedupeKey);
+
   void invoke<Lyrics>("get_lyrics", {
-    title: track.title,
-    artist: track.artist,
-    album: track.album,
-    duration: track.duration,
+    title: next.title,
+    artist: next.artist,
+    album: next.album,
+    duration: next.duration,
   })
     .then((result) => {
       if (result.lines.length > 0 || result.instrumental) {
-        lyricsCache.set(song, result);
-        persistLyricsCache();
+        storeCachedLyrics(next, result);
       }
     })
     .catch((error) => {
       console.warn(
-        "No se pudo precargar la letra de la siguiente canción.",
+        "No se pudo precargar la letra de una canción cercana en la cola.",
         error,
       );
     })
     .finally(() => {
-      lyricsPrefetches.delete(song);
+      lyricsPrefetches.delete(dedupeKey);
+      prefetchRunning = false;
+      if (prefetchQueue.length > 0) {
+        window.clearTimeout(prefetchTimer);
+        prefetchTimer = window.setTimeout(drainPrefetchQueue, 250);
+      }
     });
+}
+
+function enqueuePrefetchTracks(tracks: UpcomingTrack[]) {
+  let added = false;
+  for (const track of tracks) {
+    if (!track.title.trim()) continue;
+    const dedupeKey = looseTrackKeyOf(track) || trackKeyOf(track);
+    if (
+      findCachedLyrics(track) ||
+      lyricsPrefetches.has(dedupeKey) ||
+      lyricsPrefetchAttempted.has(dedupeKey) ||
+      prefetchQueue.some(
+        (queued) => (looseTrackKeyOf(queued) || trackKeyOf(queued)) === dedupeKey,
+      )
+    ) {
+      continue;
+    }
+    prefetchQueue.push(track);
+    added = true;
+  }
+
+  if (added && !prefetchRunning) {
+    window.clearTimeout(prefetchTimer);
+    prefetchTimer = window.setTimeout(drainPrefetchQueue, 300);
+  }
 }
 
 const hasTrack = computed(() => player.value.title.trim().length > 0);
@@ -315,12 +388,6 @@ function metadataKeyOf(state: PlayerState): string {
   const album = state.album.trim().toLowerCase();
   if (!title && !state.video_id) return "";
   return `${title}|${artist}|${album}`;
-}
-
-function playbackKeyOf(state: PlayerState): string {
-  const metadata = metadataKeyOf(state);
-  if (!metadata && !state.video_id) return "";
-  return `${metadata}|${state.video_id}`;
 }
 
 function currentSongKey(): string {
@@ -422,139 +489,86 @@ function applyPlayer(next: PlayerState) {
   const previous = player.value;
   const previousMetadata = metadataKeyOf(previous);
   const nextMetadata = metadataKeyOf(next);
-  const previousPlayback = playbackKeyOf(previous);
-  const nextPlayback = playbackKeyOf(next);
 
-  const realStart = next.position <= 5;
-  const metadataChanged =
-    !!previousMetadata &&
-    !!nextMetadata &&
-    previousMetadata !== nextMetadata;
+  // Estado cruzado enviado por el bridge mientras <video> y la barra todavía
+  // muestran IDs distintos: conservamos el estado previo hasta que asiente.
+  if (
+    !next.video_id &&
+    next.duration <= 0 &&
+    next.position <= 0 &&
+    !!previous.video_id &&
+    next.title.trim().length > 0
+  ) {
+    player.value = { ...previous, updated_at: next.updated_at };
+    return;
+  }
+
+  const hadTrack = !!previous.video_id || !!previousMetadata;
+  const hasNextTrack = !!next.video_id || !!nextMetadata;
+  const firstTrack = !hadTrack && hasNextTrack;
+
   const videoChanged =
     !!previous.video_id &&
     !!next.video_id &&
-    previousPlayback !== nextPlayback;
-  // El cambio de video_id es identidad fuerte de pista. Exigir posición=0
-  // aquí permite que YouTube entregue primero metadatos nuevos con una
-  // posición heredada y deja seguir avanzando el contador anterior.
-  const songChanged = metadataChanged || videoChanged;
+    previous.video_id !== next.video_id;
+  const metadataChanged =
+    (!previous.video_id || !next.video_id) &&
+    !!previousMetadata &&
+    !!nextMetadata &&
+    previousMetadata !== nextMetadata;
+  const songChanged = firstTrack || videoChanged || metadataChanged;
 
-  // La identidad de la pista es la única señal válida para reiniciar el
-  // contador. Un cambio aislado de duración puede ser una lectura transitoria
-  // de la barra o del vídeo y no debe reiniciar una canción que sigue sonando.
-  const transitionStarted = songChanged;
-
-  if (transitionStarted) {
-    settleUntil = Math.max(settleUntil, now + 3000);
-
-    // La duración que llega en la transición es la del tema nuevo: la
-    // mostramos ya para que el máximo de la barra no salte después.
-    if (next.duration > 0) {
-      stableDuration.value = next.duration;
-      pendingDuration = 0;
-      pendingDurationSamples = 0;
-    }
+  if (next.video_id && currentTrackId !== next.video_id) {
+    currentTrackId = next.video_id;
   }
 
-  // Posición heredada del tema anterior (p. ej. 4:06 recortado a 2:49):
-  // congelamos el reloj en cero hasta que llegue la posición real del nuevo.
-  if (transitionStarted && !realStart) {
-    holdUntil = Math.max(holdUntil, now + 1800);
-    holdDuration = next.duration;
-    holdSong = nextPlayback;
-
-    if (next.duration > 0) {
-      stableDuration.value = next.duration;
-      pendingDuration = 0;
-      pendingDurationSamples = 0;
-    }
+  if (songChanged) {
+    seekGuardUntil = 0;
+    stableDuration.value = next.duration > 0 ? next.duration : 0;
+    pendingDuration = 0;
+    pendingDurationSamples = 0;
   }
 
   const duration = refreshDuration(next.duration);
+  const incomingPosition =
+    duration > 0
+      ? Math.min(Math.max(0, next.position), duration)
+      : Math.max(0, next.position);
 
-  if (now < holdUntil && nextPlayback === holdSong) {
-    player.value = { ...next, duration, position: 0 };
-
-    // El tema nuevo ya arrancó de verdad: aceptamos su posición y dejamos de
-    // mostrar cero. Las posiciones heredadas se siguen ignorando durante la
-    // ventana de asentamiento.
-    const durationSettled =
-      !(holdDuration > 0) ||
-      Math.abs(next.duration - holdDuration) <= 1.5 ||
-      next.duration < holdDuration - 1.5;
-
-    if (realStart && next.duration > 0 && durationSettled) {
-      holdUntil = 0;
-      stableDuration.value = next.duration;
-      pendingDuration = 0;
-      pendingDurationSamples = 0;
-      player.value = {
-        ...next,
-        duration: next.duration,
-        position: Math.max(0, next.position),
-      };
-      anchorPosition.value = Math.max(0, next.position);
-      anchorAt.value = now;
-      anchorPlaying.value = next.playing;
-      return;
-    }
-
-    anchorPosition.value = 0;
-    anchorAt.value = now;
-    anchorPlaying.value = next.playing;
-    return;
-  }
-
-  if (now < holdUntil && nextPlayback !== holdSong) {
-    holdUntil = 0;
-  }
-
-  player.value = { ...next, duration, position: next.position };
+  player.value = { ...next, duration, position: incomingPosition };
 
   // Una transición confirmada siempre empieza una nueva línea temporal.
-  // No permitimos que el ancla anterior ni seekGuardUntil conserven el
-  // contador de la canción previa.
   if (songChanged) {
-    anchorPosition.value = realStart ? Math.max(0, next.position) : 0;
+    anchorPosition.value = incomingPosition;
     anchorAt.value = now;
     anchorPlaying.value = next.playing;
     return;
   }
 
-  if (now < seekGuardUntil) return;
-
-  const expected =
-    anchorPosition.value +
-    (anchorPlaying.value ? (now - anchorAt.value) / 1000 : 0);
-
-  // Estados atrasados/duplicados del cambio automático: durante el
-  // asentamiento ignoramos saltos grandes y retrocesos cerca del inicio.
-  if (now < settleUntil) {
-    if (next.position > expected + 12) return;
-    if (expected < 12 && next.position < expected - 3) return;
-  }
-
-  const incomingPosition =
-    duration > 0 ? Math.min(next.position, duration) : next.position;
-
-  // Una lectura atrasada de la barra o un estado "paused" transitorio puede
-  // traer una posición anterior aunque la pista siga en la misma reproducción.
-  // El reloj solo puede retroceder por un seek explícito o por una pista nueva.
-  if (
-    incomingPosition < expected - 1.5 &&
-    now >= seekGuardUntil &&
-    (next.playing || anchorPlaying.value)
-  ) {
+  if (now < seekGuardUntil) {
+    if (next.playing !== anchorPlaying.value) {
+      anchorPosition.value =
+        anchorPosition.value +
+        (anchorPlaying.value ? (now - anchorAt.value) / 1000 : 0);
+      anchorAt.value = now;
+      anchorPlaying.value = next.playing;
+    }
     return;
   }
 
-  // Dentro de la misma pista el reloj local es la única fuente que avanza.
-  // Reanclar por cada lectura adelantada del bridge hace que el tiempo se
-  // acumule y pueda parecer más rápido que YouTube Music.
-  if (!next.playing || next.playing !== anchorPlaying.value) {
-    anchorPosition.value = incomingPosition;
-    anchorAt.value = now;
+  // Un "0" transitorio durante el reemplazo del vídeo no debe reiniciar el
+  // reloj de una pista que sigue reproduciéndose.
+  const expectedPosition =
+    anchorPosition.value +
+    (anchorPlaying.value ? (now - anchorAt.value) / 1000 : 0);
+  if (next.playing && incomingPosition <= 0 && expectedPosition > 1.5) {
+    anchorPlaying.value = true;
+    return;
   }
+
+  // Cada lectura confirmada reancla el reloj local al tiempo real del <video>.
+  anchorPosition.value = incomingPosition;
+  anchorAt.value = now;
   anchorPlaying.value = next.playing;
 }
 
@@ -601,8 +615,6 @@ function seekTo(seconds: number) {
   seekGuardUntil = performance.now() + 1800;
   // Un salto pedido por el usuario manda: no debe confundirse con los
   // estados atrasados del cambio automático.
-  holdUntil = 0;
-  settleUntil = 0;
   anchorPosition.value = value;
   anchorAt.value = performance.now();
   anchorPlaying.value = player.value.playing;
@@ -631,6 +643,7 @@ async function enterBigScreen() {
 
   try {
     await invoke("set_ytm_visible", { visible: false });
+    await invoke("ytm_nudge");
   } catch {
     /* el reproductor integrado puede no existir todavía */
   }
@@ -655,6 +668,7 @@ async function exitBigScreen() {
 
   try {
     await invoke("set_ytm_visible", { visible: true });
+    await invoke("ytm_nudge");
   } catch {
     /* ignorar */
   }
@@ -1022,8 +1036,8 @@ async function loadLyrics(force = false, isRetry = false) {
       clearLyricsRetry();
       lyricsAttempt = 0;
       lyrics.value = result;
-      lyricsCache.set(song, result);
-      persistLyricsCache();
+      lyricsVideoId.value = player.value.video_id;
+      storeCachedLyrics(player.value, result);
       return;
     }
 
@@ -1036,7 +1050,7 @@ async function loadLyrics(force = false, isRetry = false) {
 
     clearLyricsRetry();
     lyricsAttempt = 0;
-    const cached = lyricsCache.get(song);
+    const cached = findCachedLyrics(player.value);
     lyrics.value = cached ?? result;
   } catch (error) {
     if (request === lyricsRequest && currentSongKey() === song) {
@@ -1045,7 +1059,7 @@ async function loadLyrics(force = false, isRetry = false) {
         return;
       }
 
-      const cached = lyricsCache.get(song);
+      const cached = findCachedLyrics(player.value);
       lyrics.value = cached ?? {
         lines: [],
         synced: false,
@@ -1074,13 +1088,31 @@ watch(trackKey, (key) => {
     lyrics.value = null;
     lyricsKey.value = "";
     lyricsSongKey.value = "";
+    lyricsVideoId.value = "";
     lyricsLoading.value = false;
     lyricsAttempt = 0;
     return;
   }
 
   const song = currentSongKey();
-  const cached = lyricsCache.get(song);
+  const currentVideoId = player.value.video_id;
+  const hasLoadedLyrics = Boolean(
+    lyrics.value &&
+      (lyrics.value.lines.length > 0 || lyrics.value.instrumental),
+  );
+
+  // Si sigue siendo el mismo video_id y ya tenemos la letra cargada, es solo
+  // un ajuste menor de metadatos (por ejemplo, llegó el álbum o cambió el
+  // formato del artista). No volvemos a mostrar "Buscando letra…".
+  if (hasLoadedLyrics && currentVideoId && currentVideoId === lyricsVideoId.value) {
+    lyricsKey.value = key;
+    lyricsSongKey.value = song;
+    lyricsLoading.value = false;
+    storeCachedLyrics(player.value, lyrics.value!);
+    return;
+  }
+
+  const cached = findCachedLyrics(player.value);
   const songChanged = song !== lyricsSongKey.value;
 
   if (songChanged) {
@@ -1093,6 +1125,7 @@ watch(trackKey, (key) => {
     clearLyricsRetry();
     lyricsKey.value = key;
     lyrics.value = cached;
+    lyricsVideoId.value = currentVideoId;
     lyricsLoading.value = false;
     return;
   }
@@ -1100,10 +1133,11 @@ watch(trackKey, (key) => {
   if (!songChanged && key === lyricsKey.value && lyrics.value) return;
 
   lyrics.value = null;
+  lyricsVideoId.value = "";
   lyricsLoading.value = true;
   lyricsTimer = window.setTimeout(() => {
     void loadLyrics(false);
-  }, 400);
+  }, 300);
 });
 
 watch(
@@ -1113,15 +1147,29 @@ watch(
   },
 );
 
+const prefetchSignature = computed(() => {
+  const list =
+    player.value.prefetch_tracks && player.value.prefetch_tracks.length > 0
+      ? player.value.prefetch_tracks
+      : player.value.next_track
+        ? [player.value.next_track]
+        : [];
+  return list
+    .map((track) => `${track.title}|${track.artist}|${Math.round(track.duration)}`)
+    .join(";;");
+});
+
 watch(
-  () => player.value.next_track,
-  (track) => {
-    if (!track?.title) return;
-    window.setTimeout(() => {
-      if (player.value.next_track === track) {
-        prefetchLyrics(track);
-      }
-    }, 350);
+  prefetchSignature,
+  () => {
+    const list =
+      player.value.prefetch_tracks && player.value.prefetch_tracks.length > 0
+        ? player.value.prefetch_tracks
+        : player.value.next_track
+          ? [player.value.next_track]
+          : [];
+    if (list.length === 0) return;
+    enqueuePrefetchTracks(list);
   },
   { immediate: true },
 );
@@ -1131,6 +1179,18 @@ watch(connected, (isConnected) => {
     volumeRestored = true;
     restoreVolume();
   }
+});
+
+watch(bigScreen, (active) => {
+  window.clearInterval(bigScreenNudgeTimer);
+  bigScreenNudgeTimer = undefined;
+  if (!active) return;
+
+  // En pantalla grande el webview está fuera de la ventana; forzar envíos
+  // periódicos evita que el throttling de timers de WebView2 congele el tiempo.
+  bigScreenNudgeTimer = window.setInterval(() => {
+    void invoke("ytm_nudge").catch(() => {});
+  }, 1000);
 });
 
 onMounted(async () => {
@@ -1187,8 +1247,10 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", scheduleBounds);
   siteObserver?.disconnect();
   if (clockTimer) window.clearInterval(clockTimer);
+  if (bigScreenNudgeTimer) window.clearInterval(bigScreenNudgeTimer);
   if (boundsFrame !== undefined) cancelAnimationFrame(boundsFrame);
   window.clearTimeout(lyricsTimer);
+  window.clearTimeout(prefetchTimer);
   clearLyricsRetry();
   window.clearTimeout(errorTimer);
   unlisten?.();
