@@ -269,7 +269,13 @@ pub fn eval_command(app: &AppHandle, action: &str, value: Option<f64>) -> Result
             let volume = value
                 .filter(|value| value.is_finite())
                 .ok_or_else(|| "Volumen inválido.".to_string())?;
-            format!("window.__ytm && window.__ytm.volume({volume})")
+            format!("window.__ytm && window.__ytm.volume({volume}, true)")
+        }
+        "restore_volume" => {
+            let volume = value
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| "Volumen inválido.".to_string())?;
+            format!("window.__ytm && window.__ytm.volume({volume}, false)")
         }
         other => return Err(format!("Acción desconocida: {other}")),
     };

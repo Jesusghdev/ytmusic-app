@@ -16,12 +16,17 @@
   var ipcUnavailable = false;
   var trackSignature = "";
   var trackChangedAt = 0;
-  var endedVideoId = "";
-  var boundVideo = null;
-  var boundVideoId = "";
   var pendingSeek = null;
   var pendingSeekUntil = 0;
   var pendingSeekStartedAt = 0;
+  var manualTrackChange = null;
+  var preEndTrackKey = "";
+  var preEndTriggered = false;
+  var preEndLastPosition = -1;
+  var stableDurationKey = "";
+  var stableDuration = 0;
+  var pendingDuration = 0;
+  var pendingDurationSamples = 0;
 
   function video() {
     return (
@@ -126,6 +131,16 @@
   }
 
   function getVideoId() {
+    var link = document.querySelector('ytmusic-player-bar a[href*="watch?v="]');
+    if (link) {
+      try {
+        var linkId = new URL(link.href).searchParams.get("v") || "";
+        if (linkId) return linkId;
+      } catch (error) {
+        /* continuar con la URL de la página */
+      }
+    }
+
     try {
       var id = new URL(location.href).searchParams.get("v");
       if (id) return id;
@@ -220,41 +235,62 @@
     return false;
   }
 
+  function stableTrackDuration(trackId, barDuration, videoDuration) {
+    var candidate = videoDuration > 0
+      ? videoDuration
+      : barDuration;
+
+    if (trackId !== stableDurationKey) {
+      stableDurationKey = trackId;
+      stableDuration = candidate > 0 ? candidate : 0;
+      pendingDuration = 0;
+      pendingDurationSamples = 0;
+      return stableDuration;
+    }
+
+    if (!(candidate > 0)) return stableDuration;
+
+    if (stableDuration > 0 && Math.abs(candidate - stableDuration) <= 1.5) {
+      pendingDuration = 0;
+      pendingDurationSamples = 0;
+      return stableDuration;
+    }
+
+    if (Math.abs(candidate - pendingDuration) <= 0.75) {
+      pendingDurationSamples += 1;
+    } else {
+      pendingDuration = candidate;
+      pendingDurationSamples = 1;
+    }
+
+    if (pendingDurationSamples >= 2) {
+      stableDuration = candidate;
+      pendingDuration = 0;
+      pendingDurationSamples = 0;
+    }
+
+    return stableDuration;
+  }
+
   function readState() {
     var meta = readMeta();
     var el = video();
-    bindVideoEnded(el);
     var playing = false;
     var videoDuration = el && isFinite(el.duration) ? el.duration : 0;
     var bar = readBarTime();
     var barDuration = bar.duration;
     var barPosition = bar.position;
-    var duration = videoDuration;
-    var position = el && isFinite(el.currentTime) ? el.currentTime : 0;
-    var videoMatchesBar =
-      videoDuration <= 0 ||
-      barDuration <= 0 ||
-      Math.abs(videoDuration - barDuration) <= 3;
-
-    if (barDuration > 0) {
-      // La barra oficial es la base. El video solo se usa como refinamiento
-      // cuando está dentro de una ventana coherente con la barra; si no,
-      // mandan los valores de la barra.
-      duration = barDuration;
-
-      if (
-        !videoMatchesBar ||
-        position < 0 ||
-        !isFinite(position) ||
-        Math.abs(position - barPosition) > 3
-      ) {
-        position = Math.max(0, Math.min(barPosition, barDuration));
-      }
-    }
-
-    if (el && el.ended && duration > 0) {
-      position = duration;
-    }
+    var currentVideoId = getVideoId();
+    var duration = stableTrackDuration(
+      currentVideoId,
+      barDuration,
+      videoDuration
+    );
+    var position = el && isFinite(el.currentTime)
+      ? el.currentTime
+      : barDuration > 0
+        ? barPosition
+        : 0;
 
     if (el) {
       playing = !el.paused && !el.ended;
@@ -272,13 +308,6 @@
       trackChangedAt = Date.now();
     }
 
-    var currentVideoId = getVideoId();
-    if (el && el.ended) {
-      advanceAfterEnded(currentVideoId);
-    } else {
-      endedVideoId = "";
-    }
-
     return {
       title: meta.title,
       artist: meta.artist,
@@ -294,41 +323,58 @@
     };
   }
 
-  function advanceAfterEnded(videoId) {
-    var identity = videoId || "__ended__";
-    if (endedVideoId === identity) return;
-    endedVideoId = identity;
+  function maybeAdvanceNearEnd(state) {
+    var el = video();
+    if (!el || el.paused || el.ended) return;
+    if (!state.video_id) return;
 
-    var clicked = clickAny([
-      "ytmusic-player-bar #next-button",
-      "ytmusic-player-bar .next-button",
-      "#next-button",
-      ".next-button",
-      'ytmusic-player-bar [aria-label="Next song"]',
-      '[aria-label="Next song"]',
-    ]);
-    if (!clicked) pressKey("N", true);
-  }
+    var trackReady =
+      !trackChangedAt || Date.now() - trackChangedAt >= 1200;
+    if (!trackReady) return;
 
-  function bindVideoEnded(el) {
-    if (el === boundVideo) return;
+    var trackKey =
+      state.video_id ||
+      [state.title, state.artist, state.album].join("|");
+    if (!trackKey) return;
 
-    if (boundVideo) {
-      boundVideo.removeEventListener("ended", onVideoEnded);
+    if (trackKey !== preEndTrackKey) {
+      preEndTrackKey = trackKey;
+      preEndTriggered = false;
+      preEndLastPosition = -1;
     }
 
-    boundVideo = el;
-    boundVideoId = el ? getVideoId() : "";
-    endedVideoId = "";
+    var duration = isFinite(el.duration) ? el.duration : state.duration;
+    var position = isFinite(el.currentTime) ? el.currentTime : state.position;
 
-    if (boundVideo) {
-      boundVideo.addEventListener("ended", onVideoEnded);
+    if (
+      preEndLastPosition >= 0 &&
+      position < preEndLastPosition - 2.5
+    ) {
+      preEndTriggered = false;
     }
-  }
+    preEndLastPosition = position;
 
-  function onVideoEnded() {
-    advanceAfterEnded(boundVideoId);
-    window.setTimeout(sendState, 50);
+    if (preEndTriggered || duration < 10) return;
+
+    var remaining = duration - position;
+    if (remaining <= 2.0 && remaining >= -0.5) {
+      preEndTriggered = true;
+      manualTrackChange = {
+        fromVideoId: getVideoId(),
+        startedAt: Date.now(),
+      };
+
+      var clicked = clickAny([
+        "ytmusic-player-bar #next-button",
+        "ytmusic-player-bar .next-button",
+        "#next-button",
+        ".next-button",
+        'ytmusic-player-bar [aria-label="Next song"]',
+        '[aria-label="Next song"]',
+      ]);
+      if (!clicked) pressKey("N", true);
+      window.setTimeout(sendState, 250);
+    }
   }
 
   function sendState() {
@@ -336,6 +382,7 @@
       if (location.hostname !== "music.youtube.com") return;
 
       var state = readState();
+      maybeAdvanceNearEnd(state);
       var internals = window.__TAURI_INTERNALS__;
 
       if (!ipcUnavailable && internals && typeof internals.invoke === "function") {
@@ -442,6 +489,10 @@
     },
 
     next: function () {
+      manualTrackChange = {
+        fromVideoId: getVideoId(),
+        startedAt: Date.now(),
+      };
       var clicked = clickAny([
         "ytmusic-player-bar #next-button",
         "ytmusic-player-bar .next-button",
@@ -451,9 +502,14 @@
         '[aria-label="Next song"]',
       ]);
       if (!clicked) pressKey("N", true);
+      window.setTimeout(sendState, 250);
     },
 
     prev: function () {
+      manualTrackChange = {
+        fromVideoId: getVideoId(),
+        startedAt: Date.now(),
+      };
       var clicked = clickAny([
         "ytmusic-player-bar #previous-button",
         "ytmusic-player-bar .previous-button",
@@ -463,23 +519,55 @@
         '[aria-label="Previous song"]',
       ]);
       if (!clicked) pressKey("P", true);
+      window.setTimeout(sendState, 250);
     },
 
     seek: function (seconds) {
       var el = video();
       if (!el) return;
       var state = readState();
-      var durationReady =
-        !state.duration ||
-        !isFinite(el.duration) ||
-        Math.abs(el.duration - state.duration) <= 3;
+      var currentVideoId = getVideoId();
+      var mediaVideoId = "";
+      try {
+        mediaVideoId = new URL(el.currentSrc || el.src || "", location.href)
+          .searchParams.get("v") || "";
+      } catch (error) {
+        mediaVideoId = "";
+      }
+      var barLink = document.querySelector(
+        'ytmusic-player-bar a[href*="watch?v="]'
+      );
+      var barVideoId = "";
+      if (barLink) {
+        try {
+          barVideoId = new URL(barLink.href).searchParams.get("v") || "";
+        } catch (error) {
+          barVideoId = "";
+        }
+      }
+
+      if (
+        manualTrackChange &&
+        Date.now() - manualTrackChange.startedAt < 4000 &&
+        barVideoId &&
+        barVideoId === manualTrackChange.fromVideoId
+      ) {
+        pendingSeek = seconds;
+        pendingSeekUntil = Date.now() + 4000;
+        pendingSeekStartedAt = Date.now();
+        return;
+      }
+
+      if (manualTrackChange) {
+        manualTrackChange = null;
+      }
       var trackReady =
         !trackChangedAt || Date.now() - trackChangedAt >= 1200;
 
       // Durante el cambio automático la UI puede recibir los metadatos nuevos
       // antes de que YouTube reemplace el elemento de vídeo. No debemos buscar
       // en ese elemento porque todavía reproduce la canción anterior.
-      if (!durationReady || !trackReady) {
+      if (!trackReady) {
         pendingSeek = seconds;
         pendingSeekUntil = Date.now() + 3000;
         pendingSeekStartedAt = Date.now();
@@ -487,16 +575,30 @@
       }
 
       var max = state.duration > 0 ? state.duration : el.duration;
-      el.currentTime = Math.max(0, Math.min(seconds, max));
+      var requested = Math.max(0, Math.min(seconds, max));
+      var mediaDuration = isFinite(el.duration) ? el.duration : 0;
+      var mediaSeconds = mediaDuration > 0 && state.duration > 0
+        ? requested * mediaDuration / state.duration
+        : requested;
+      el.currentTime = Math.max(0, Math.min(mediaSeconds, mediaDuration || mediaSeconds));
       sendState();
     },
 
-    volume: function (value) {
+    volume: function (value, userChanged) {
       var el = video();
       if (!el) return;
       el.volume = Math.max(0, Math.min(1, value));
       el.muted = false;
       sendState();
+      if (userChanged !== false) {
+        var internals = window.__TAURI_INTERNALS__;
+        if (internals && typeof internals.invoke === "function") {
+          internals.invoke("plugin:event|emit", {
+            event: "volume-changed",
+            payload: el.volume,
+          }).catch(function () {});
+        }
+      }
     },
 
     readState: readState,
@@ -515,20 +617,19 @@
     var value = pendingSeek;
     var el = video();
     var state = readState();
-    var durationReady =
-      el &&
-      (!state.duration ||
-        !isFinite(el.duration) ||
-        Math.abs(el.duration - state.duration) <= 3);
     var trackReady =
       !trackChangedAt || Date.now() - trackChangedAt >= 1200;
 
     if (!el || !trackReady) return;
-    if (!durationReady && Date.now() - pendingSeekStartedAt < 1800) return;
 
     pendingSeek = null;
     var max = state.duration > 0 ? state.duration : el.duration;
-    el.currentTime = Math.max(0, Math.min(value, max));
+    var requested = Math.max(0, Math.min(value, max));
+    var mediaDuration = isFinite(el.duration) ? el.duration : 0;
+    var mediaSeconds = mediaDuration > 0 && state.duration > 0
+      ? requested * mediaDuration / state.duration
+      : requested;
+    el.currentTime = Math.max(0, Math.min(mediaSeconds, mediaDuration || mediaSeconds));
     pendingSeekStartedAt = 0;
     sendState();
   }, 150);

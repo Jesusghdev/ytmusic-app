@@ -298,8 +298,23 @@ fn normalize_query(value: &str) -> String {
     value
         .chars()
         .map(|character| {
-            if character.is_alphanumeric() || character.is_whitespace() {
-                character
+            let folded = match character {
+                'á' | 'à' | 'ä' | 'â' | 'ã' => 'a',
+                'é' | 'è' | 'ë' | 'ê' => 'e',
+                'í' | 'ì' | 'ï' | 'î' => 'i',
+                'ó' | 'ò' | 'ö' | 'ô' | 'õ' => 'o',
+                'ú' | 'ù' | 'ü' | 'û' => 'u',
+                'ñ' => 'n',
+                'Á' | 'À' | 'Ä' | 'Â' | 'Ã' => 'A',
+                'É' | 'È' | 'Ë' | 'Ê' => 'E',
+                'Í' | 'Ì' | 'Ï' | 'Î' => 'I',
+                'Ó' | 'Ò' | 'Ö' | 'Ô' | 'Õ' => 'O',
+                'Ú' | 'Ù' | 'Ü' | 'Û' => 'U',
+                'Ñ' => 'N',
+                other => other,
+            };
+            if folded.is_alphanumeric() || folded.is_whitespace() {
+                folded
             } else {
                 ' '
             }
@@ -352,6 +367,23 @@ fn artist_matches(track_artist: Option<&str>, requested_artist: &str) -> bool {
         normalized_equal(value, requested_artist)
             || artist_overlap(value, requested_artist) == requested_artists.len()
     })
+}
+
+fn primary_artist_matches(track_artist: Option<&str>, requested_artist: &str) -> bool {
+    let track_artists = match track_artist {
+        Some(value) => artist_tokens(value),
+        None => return false,
+    };
+    if track_artists.len() != 1 {
+        return false;
+    }
+
+    let requested_artists = artist_tokens(requested_artist);
+    if requested_artists.is_empty() {
+        return false;
+    }
+
+    track_artists[0] == requested_artists[0]
 }
 
 fn matches_request(
@@ -445,7 +477,9 @@ fn pick_best(
             .as_deref()
             .map(|value| normalized_equal(value, title))
             .unwrap_or(false);
-        let artist_matches = artist_matches(track.artist_name.as_deref(), artist);
+        let artist_matches =
+            artist_matches(track.artist_name.as_deref(), artist)
+                || primary_artist_matches(track.artist_name.as_deref(), artist);
         let duration_matches = duration_difference(track, duration)
             .map(|difference| difference <= 8.0)
             .unwrap_or(duration <= 0.0);
@@ -696,6 +730,36 @@ mod tests {
             artist_query("Nsqk y Julieta Venegas & mosca"),
             "nsqk julieta venegas mosca"
         );
+    }
+
+    #[test]
+    fn matches_accent_and_primary_artist_variants() {
+        assert!(normalized_equal(
+            "bailar kon la mas fea",
+            "bailar kon la más fea"
+        ));
+
+        let track = LrcLibTrack {
+            track_name: Some("bailar kon la mas fea".to_string()),
+            artist_name: Some("KUINA".to_string()),
+            duration: Some(237.0),
+            instrumental: Some(false),
+            plain_lyrics: None,
+            synced_lyrics: Some("[00:01.00]Hola".to_string()),
+            lyrics_file: None,
+        };
+
+        assert!(primary_artist_matches(
+            track.artist_name.as_deref(),
+            "KUINA, Dillom y Ovyze"
+        ));
+        assert!(pick_best(
+            vec![track],
+            "bailar kon la más fea",
+            "KUINA, Dillom y Ovyze",
+            237.0
+        )
+        .is_some());
     }
 
     #[test]

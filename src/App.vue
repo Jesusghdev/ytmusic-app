@@ -125,19 +125,14 @@ let settleUntil = 0;
 let pendingDuration = 0;
 let pendingDurationSamples = 0;
 let unlisten: UnlistenFn | null = null;
+let unlistenVolume: UnlistenFn | null = null;
 let unlistenResize: UnlistenFn | null = null;
 let unlistenScale: UnlistenFn | null = null;
 let clockTimer: number | undefined;
 let boundsFrame: number | undefined;
 let siteObserver: ResizeObserver | null = null;
 const lyricsPrefetches = new Set<string>();
-let volumeRestoreTimer: number | undefined;
-let volumeRestoreAttempts = 0;
 let volumeRestored = false;
-let volumeReady = false;
-let volumeRestoreFailed = false;
-let volumeRestoreBaseline = 0;
-let volumeRestoreTarget: number | null = null;
 
 function restoreLyricsCache() {
   try {
@@ -199,58 +194,19 @@ function persistVolume(volume: number) {
   }
 }
 
-function finishVolumeRestore() {
-  window.clearInterval(volumeRestoreTimer);
-  volumeRestoreTimer = undefined;
-  volumeRestoreFailed = false;
-  volumeRestoreTarget = null;
-  volumeReady = true;
-}
-
 function restoreVolume() {
   if (!maintainVolume.value) {
-    volumeReady = true;
-    volumeRestoreTarget = null;
     return;
   }
 
   const stored = readStoredVolume();
   if (stored === null) {
-    // Sin preferencia guardada: dejamos el volumen que trae YouTube Music y
-    // empezamos a recordarlo a partir de ahora.
-    volumeReady = true;
     return;
   }
 
-  volumeRestoreAttempts = 0;
-  volumeRestoreFailed = false;
-  volumeRestoreBaseline = player.value.volume;
-  volumeRestoreTarget = stored;
-  volumeReady = false;
-  window.clearInterval(volumeRestoreTimer);
-  const attempt = () => {
-    // El elemento <video> de YouTube Music puede no existir todavía; repetimos
-    // hasta que el volumen reportado coincida con el guardado.
-    if (Math.abs(player.value.volume - stored) < 0.01) {
-      finishVolumeRestore();
-      return;
-    }
-
-    if (++volumeRestoreAttempts > 20) {
-      window.clearInterval(volumeRestoreTimer);
-      volumeRestoreTimer = undefined;
-      volumeRestoreFailed = true;
-      console.warn(
-        "No se pudo confirmar la restauración del volumen; se conservará la preferencia guardada.",
-      );
-      return;
-    }
-
-    void send("volume", stored);
-  };
-
-  attempt();
-  volumeRestoreTimer = window.setInterval(attempt, 500);
+  // Se envía una sola vez como restauración interna. No se persiste el estado
+  // inicial recibido del bridge.
+  void send("restore_volume", stored);
 }
 
 function trackKeyOf(track: UpcomingTrack): string {
@@ -478,7 +434,10 @@ function applyPlayer(next: PlayerState) {
     !!previous.video_id &&
     !!next.video_id &&
     previousPlayback !== nextPlayback;
-  const songChanged = metadataChanged || (videoChanged && realStart);
+  // El cambio de video_id es identidad fuerte de pista. Exigir posición=0
+  // aquí permite que YouTube entregue primero metadatos nuevos con una
+  // posición heredada y deja seguir avanzando el contador anterior.
+  const songChanged = metadataChanged || videoChanged;
 
   // La identidad de la pista es la única señal válida para reiniciar el
   // contador. Un cambio aislado de duración puede ser una lectura transitoria
@@ -577,7 +536,6 @@ function applyPlayer(next: PlayerState) {
 
   const incomingPosition =
     duration > 0 ? Math.min(next.position, duration) : next.position;
-  const drift = incomingPosition - expected;
 
   // Una lectura atrasada de la barra o un estado "paused" transitorio puede
   // traer una posición anterior aunque la pista siga en la misma reproducción.
@@ -590,16 +548,10 @@ function applyPlayer(next: PlayerState) {
     return;
   }
 
-  // Las lecturas del elemento de vídeo y de la barra oficial llegan
-  // alternadas durante la reproducción. Reanclar el reloj en cada lectura
-  // hace que el contador retroceda varios segundos y que las letras se
-  // recentren continuamente. Solo corregimos un desfase real; las pequeñas
-  // diferencias normales se dejan al reloj local.
-  if (
-    !next.playing ||
-    next.playing !== anchorPlaying.value ||
-    Math.abs(drift) > 1.5
-  ) {
+  // Dentro de la misma pista el reloj local es la única fuente que avanza.
+  // Reanclar por cada lectura adelantada del bridge hace que el tiempo se
+  // acumule y pueda parecer más rápido que YouTube Music.
+  if (!next.playing || next.playing !== anchorPlaying.value) {
     anchorPosition.value = incomingPosition;
     anchorAt.value = now;
   }
@@ -617,6 +569,9 @@ function flashError(message: string) {
 async function send(action: string, value?: number) {
   try {
     await invoke("ytm_command", { action, value: value ?? null });
+    if (action === "volume" && maintainVolume.value && value !== undefined) {
+      persistVolume(value);
+    }
   } catch (error) {
     flashError(String(error));
   }
@@ -821,12 +776,11 @@ function toggleMaintainVolume() {
     return;
   }
 
-  window.clearInterval(volumeRestoreTimer);
-  volumeRestoreTimer = undefined;
-  volumeRestoreAttempts = 0;
-  volumeRestoreFailed = false;
-  volumeRestoreTarget = null;
-  volumeReady = true;
+  try {
+    localStorage.removeItem(VOLUME_KEY);
+  } catch {
+    /* no disponible */
+  }
 }
 
 function openSettings() {
@@ -1179,38 +1133,6 @@ watch(connected, (isConnected) => {
   }
 });
 
-watch(
-  () => player.value.volume,
-  (volume) => {
-    if (!maintainVolume.value || !Number.isFinite(volume)) return;
-
-    if (
-      volumeRestoreTarget !== null &&
-      Math.abs(volume - volumeRestoreTarget) < 0.01
-    ) {
-      finishVolumeRestore();
-      return;
-    }
-
-    if (volumeReady) {
-      persistVolume(volume);
-      return;
-    }
-
-    // Si la restauración agotó sus intentos, solo desbloqueamos la
-    // persistencia cuando el usuario cambia realmente el volumen.
-    if (
-      volumeRestoreFailed &&
-      Math.abs(volume - volumeRestoreBaseline) >= 0.01
-    ) {
-      volumeRestoreFailed = false;
-      volumeRestoreTarget = null;
-      volumeReady = true;
-      persistVolume(volume);
-    }
-  },
-);
-
 onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
   window.addEventListener("resize", scheduleBounds);
@@ -1228,6 +1150,10 @@ onMounted(async () => {
 
   unlisten = await listen<PlayerState>("player-state", (event) => {
     applyPlayer(event.payload);
+  });
+  unlistenVolume = await listen<number>("volume-changed", (event) => {
+    if (!maintainVolume.value || !Number.isFinite(event.payload)) return;
+    persistVolume(event.payload);
   });
 
   try {
@@ -1265,10 +1191,8 @@ onBeforeUnmount(() => {
   window.clearTimeout(lyricsTimer);
   clearLyricsRetry();
   window.clearTimeout(errorTimer);
-  if (volumeRestoreTimer !== undefined) {
-    window.clearInterval(volumeRestoreTimer);
-  }
   unlisten?.();
+  unlistenVolume?.();
   unlistenResize?.();
   unlistenScale?.();
 });

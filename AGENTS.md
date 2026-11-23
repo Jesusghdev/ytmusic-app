@@ -112,6 +112,12 @@ Estos son detalles que NO deben romperse al modificar código:
 6. **El bridge es frágil**: depende de selectores del DOM de YouTube Music (`#movie_player video`, `ytmusic-player-bar`, etc.). Los cambios de YouTube pueden romperlo; los selectores tienen múltiples variantes como respaldo.
 7. **Letras**: `lyrics.rs` consulta varias fuentes en paralelo y puntúa candidatos (coincidencia de título/artista/duración). Tiene tests con `cargo test`. LRCLIB requiere el header `Lrclib-App-Id` (ver `LRCLIB_APP_ID`).
 8. **Idioma**: código y comentarios en español; mensajes de UI en español.
+9. **Identidad y contador**: `video_id` es la señal más fuerte de cambio de pista, no solo `position <= 5` ni cambios aislados de duración. Al cambiar de canción se debe reiniciar el ancla y aceptar la posición nueva sin heredar el contador anterior.
+10. **Duración estable**: en `bridge.js`, el `<video>` real tiene prioridad sobre el texto desactualizado de la barra. La duración se conserva por `video_id` y solo cambia después de una lectura repetida o al detectar una pista nueva. No aceptes duraciones heredadas de la canción anterior.
+11. **Posición real**: la posición visible debe salir preferentemente de `el.currentTime`; solo usar `readBarTime()` como respaldo. Una lectura atrasada o transitoriamente pausada no debe retroceder ni adelantar el reloj local.
+12. **Pausa y seeks**: pausas y seeks manuales invalidan la extrapolación automática local. Busca pausas, seeks y cambios de pista antes de conservar o avanzar un ancla.
+13. **Avance automático anticipado**: solo ejecutar `next` desde el puente durante reproducción activa, 1-2 segundos antes del final, una vez por `video_id`, después de asentamiento del cambio de pista y con protección contra retrocesos. Nunca dispararlo mientras esté pausado.
+14. **Normalización de letras**: las coincidencias de LRCLIB deben ignorar acentos españoles (`más`/`mas`, `ásí`/`asi`) y signos de puntuación, pero conservar límites conservadores de artista y duración. Una búsqueda libre normalizada debe incluir variantes sin acento.
 
 ## Comandos de desarrollo
 
